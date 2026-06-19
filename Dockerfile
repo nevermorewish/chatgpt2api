@@ -1,6 +1,6 @@
 ARG TARGETARCH
 
-FROM node:22-alpine AS web-build
+FROM crpi-dzjyl2rfnlfugj1m.cn-shanghai.personal.cr.aliyuncs.com/frogclaw/base-node:22-alpine AS web-build
 
 WORKDIR /app/web
 
@@ -13,7 +13,7 @@ COPY web ./
 RUN NEXT_PUBLIC_APP_VERSION="$(cat /app/VERSION)" npm run build
 
 
-FROM python:3.13-slim AS app
+FROM crpi-dzjyl2rfnlfugj1m.cn-shanghai.personal.cr.aliyuncs.com/frogclaw/base-python:3.13-slim AS app
 
 ARG TARGETARCH
 
