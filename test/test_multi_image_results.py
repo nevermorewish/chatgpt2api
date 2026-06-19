@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 import unittest
 from unittest import mock
 
+from PIL import Image
+
 from services.config import config
 from services.openai_backend_api import OpenAIBackendAPI
-from services.protocol.conversation import ImageOutput, extract_conversation_ids
+from services.protocol.conversation import ConversationRequest, ImageOutput, extract_conversation_ids, stream_codex_image_outputs
 from services.protocol.openai_v1_response import stream_image_response
 
 
@@ -47,6 +50,34 @@ class FakeBackend(OpenAIBackendAPI):
 
     def _get_attachment_download_url(self, conversation_id: str, attachment_id: str) -> str:
         return self.sediment_urls.get(attachment_id, "")
+
+
+class FakeCodexBackend:
+    def __init__(self, image_b64: str) -> None:
+        self.image_b64 = image_b64
+        self.calls: list[dict[str, object]] = []
+
+    def iter_codex_image_response_events(self, **kwargs: object):
+        self.calls.append(kwargs)
+        yield {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "image_generation_call",
+                "result": self.image_b64,
+            },
+        }
+
+
+def _png_b64(size: tuple[int, int]) -> str:
+    image = Image.new("RGB", size, "white")
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return base64.b64encode(output.getvalue()).decode("ascii")
+
+
+def _png_size_from_b64(value: str) -> tuple[int, int]:
+    with Image.open(BytesIO(base64.b64decode(value))) as image:
+        return image.size
 
 
 class MultiImageResultTests(unittest.TestCase):
@@ -174,6 +205,23 @@ class MultiImageResultTests(unittest.TestCase):
 
         self.assertEqual([event["output_index"] for event in done_events], [0, 1])
         self.assertEqual([item["result"] for item in completed["output"]], [first, second])
+
+    def test_codex_stream_resizes_result_to_requested_dimensions(self) -> None:
+        backend = FakeCodexBackend(_png_b64((1024, 1536)))
+        request = ConversationRequest(
+            model="codex-gpt-image-2",
+            prompt="draw a city",
+            size="3840x2160",
+            quality="high",
+            response_format="b64_json",
+            base_url="https://api.test",
+        )
+
+        outputs = list(stream_codex_image_outputs(backend, request))
+
+        self.assertEqual(_png_size_from_b64(outputs[0].data[0]["b64_json"]), (3840, 2160))
+        self.assertIn("3840x2160", backend.calls[0]["prompt"])
+        self.assertEqual(backend.calls[0]["size"], "3840x2160")
 
 
 if __name__ == "__main__":

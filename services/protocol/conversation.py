@@ -6,8 +6,10 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from io import BytesIO
 from typing import Any, Iterable, Iterator
 
+from PIL import Image, ImageOps
 import tiktoken
 
 from services.account_service import account_service
@@ -145,6 +147,45 @@ def is_model_text_reply_instead_of_image(message: str) -> bool:
 
 def encode_images(images: Iterable[tuple[bytes, str, str]]) -> list[str]:
     return [base64.b64encode(data).decode("ascii") for data, _, _ in images if data]
+
+
+def _requested_image_size(size: str | None) -> tuple[int, int] | None:
+    match = re.fullmatch(r"\s*(\d{2,5})x(\d{2,5})\s*", str(size or ""), re.IGNORECASE)
+    if not match:
+        return None
+    width, height = int(match.group(1)), int(match.group(2))
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def _ensure_requested_image_dimensions(b64_json: str, size: str | None) -> str:
+    target = _requested_image_size(size)
+    if not target:
+        return b64_json
+    try:
+        image_data = base64.b64decode(b64_json)
+        with Image.open(BytesIO(image_data)) as image:
+            source_size = image.size
+            image_format = image.format or "PNG"
+            if source_size == target:
+                return b64_json
+            resized = ImageOps.fit(image, target, method=Image.Resampling.LANCZOS)
+            output = BytesIO()
+            resized.save(output, format=image_format)
+        logger.info({
+            "event": "codex_image_dimension_adjusted",
+            "source_size": f"{source_size[0]}x{source_size[1]}",
+            "target_size": f"{target[0]}x{target[1]}",
+        })
+        return base64.b64encode(output.getvalue()).decode("ascii")
+    except Exception as exc:
+        logger.warning({
+            "event": "codex_image_dimension_adjust_failed",
+            "target_size": size,
+            "error": str(exc),
+        })
+        return b64_json
 
 
 def save_image_bytes(image_data: bytes, base_url: str | None = None) -> str:
@@ -1192,13 +1233,14 @@ def stream_codex_image_outputs(
         total: int = 1,
 ) -> Iterator[ImageOutput]:
     images = _codex_response_images(list(backend.iter_codex_image_response_events(
-        prompt=request.prompt,
+        prompt=build_image_prompt(request.prompt, request.size, request.quality),
         images=request.images or [],
         size=request.size,
         quality=request.quality,
     )))
     if not images:
         raise ImageGenerationError("No image result found in response")
+    images = [_ensure_requested_image_dimensions(item, request.size) for item in images]
     data = format_image_result(
         [{"b64_json": item, "revised_prompt": request.prompt} for item in images],
         request.prompt,
