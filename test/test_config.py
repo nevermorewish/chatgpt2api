@@ -58,6 +58,86 @@ class ConfigLoadingTests(unittest.TestCase):
                 else:
                     module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
 
+    def test_image_generation_api_max_concurrency_is_normalized(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "auth-key": "test-auth",
+                        "image_generation_api_max_concurrency": "0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            store = self.config_module.ConfigStore(path)
+
+            self.assertEqual(store.image_generation_api_max_concurrency, 1)
+            updated = store.update({"image_generation_api_max_concurrency": "12"})
+            self.assertEqual(store.image_generation_api_max_concurrency, 12)
+            self.assertEqual(updated["image_generation_api_max_concurrency"], 12)
+            self.assertEqual(updated["image_generation_api_upstreams"], [])
+
+    def test_image_generation_api_upstream_max_concurrency_uses_global_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "auth-key": "test-auth",
+                        "image_generation_api_max_concurrency": 6,
+                        "image_generation_api_upstreams": [
+                            {
+                                "id": "u1",
+                                "name": "上游 1",
+                                "base_url": "https://example.com",
+                                "model": "gpt-image-2",
+                                "enabled": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            store = self.config_module.ConfigStore(path)
+
+            upstreams = store.image_generation_api_upstreams
+            self.assertEqual(len(upstreams), 1)
+            self.assertEqual(upstreams[0]["max_concurrency"], 6)
+            self.assertEqual(store.image_generation_api_total_max_concurrency, 6)
+
+    def test_auth_rate_limit_fields_are_normalized(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "auth-key": "test-auth",
+                        "auth_rate_limit_login_ip_limit": "-1",
+                        "auth_rate_limit_login_ip_window_seconds": "0",
+                        "auth_rate_limit_register_ip_email_limit": "5",
+                        "auth_rate_limit_register_ip_email_window_seconds": "bad",
+                        "auth_register_ip_account_limit": "1",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            store = self.config_module.ConfigStore(path)
+
+            self.assertEqual(store.auth_rate_limit_login_ip_limit, 0)
+            self.assertEqual(store.auth_rate_limit_login_ip_window_seconds, 1)
+            self.assertEqual(store.auth_rate_limit_register_ip_email_limit, 5)
+            self.assertEqual(store.auth_rate_limit_register_ip_email_window_seconds, 1800)
+            self.assertEqual(store.auth_register_ip_account_limit, 1)
+
+            updated = store.get()
+            self.assertEqual(updated["auth_rate_limit_login_ip_limit"], 0)
+            self.assertEqual(updated["auth_rate_limit_login_ip_window_seconds"], 1)
+            self.assertEqual(updated["auth_register_ip_account_limit"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

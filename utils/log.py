@@ -1,6 +1,5 @@
 import base64
 import binascii
-import json
 import logging
 import re
 from typing import Any
@@ -84,27 +83,21 @@ class Logger:
             return self._sanitize_string(value)
         return value
 
-    def _message(self, value: Any) -> str:
-        sanitized = self._sanitize(value)
-        if isinstance(sanitized, str):
-            return sanitized
-        return json.dumps(sanitized, ensure_ascii=False, default=str)
-
     def debug(self, message: Any) -> None:
         if self._enabled("debug"):
-            self._logger.debug(self._message(message))
+            self._logger.debug(self._sanitize(message))
 
     def info(self, message: Any) -> None:
         if self._enabled("info"):
-            self._logger.info(self._message(message))
+            self._logger.info(self._sanitize(message))
 
     def warning(self, message: Any) -> None:
         if self._enabled("warning"):
-            self._logger.warning(self._message(message))
+            self._logger.warning(self._sanitize(message))
 
     def error(self, message: Any) -> None:
         if self._enabled("error"):
-            self._logger.error(self._message(message))
+            self._logger.error(self._sanitize(message))
 
 
 logger = Logger()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import tempfile
 import time
 import unittest
@@ -26,12 +27,13 @@ def wait_for_task(service: ImageTaskService, identity: dict[str, object], task_i
 
 
 class ImageTaskServiceTests(unittest.TestCase):
-    def make_service(self, path: Path, handler=None) -> ImageTaskService:
+    def make_service(self, path: Path, handler=None, log_writer=None) -> ImageTaskService:
         return ImageTaskService(
             path,
             generation_handler=handler or (lambda _payload: {"data": [{"url": "http://example.test/image.png"}]}),
             edit_handler=handler or (lambda _payload: {"data": [{"url": "http://example.test/edit.png"}]}),
             retention_days_getter=lambda: 30,
+            log_writer=log_writer or (lambda _summary, _detail: None),
         )
 
     def test_duplicate_submit_uses_existing_task(self):
@@ -106,6 +108,115 @@ class ImageTaskServiceTests(unittest.TestCase):
             self.assertEqual(result["missing_ids"], [])
             self.assertEqual(result["items"][0]["status"], "success")
             self.assertEqual(result["items"][0]["data"][0]["url"], "http://example.test/image.png")
+
+    def test_completed_task_writes_call_log(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            logs = []
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json", log_writer=lambda summary, detail: logs.append((summary, detail)))
+            service.submit_generation(
+                OWNER,
+                client_task_id="logged-task",
+                prompt="cat",
+                model="gpt-image-2",
+                size="1:1",
+                quality="xhigh",
+                base_url="http://local.test",
+            )
+            wait_for_task(service, OWNER, "logged-task", "success")
+
+            self.assertEqual(len(logs), 1)
+            summary, detail = logs[0]
+            self.assertEqual(summary, "文生图任务完成")
+            self.assertEqual(detail["key_id"], OWNER["id"])
+            self.assertEqual(detail["task_id"], "logged-task")
+            self.assertEqual(detail["status"], "success")
+            self.assertEqual(detail["quality"], "xhigh")
+            self.assertEqual(detail["urls"], ["http://example.test/image.png"])
+
+    def test_task_stays_queued_until_handler_marks_started(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            started = threading.Event()
+            release = threading.Event()
+
+            def handler(payload):
+                callback = payload.get("_task_on_start")
+                time.sleep(0.05)
+                if callable(callback):
+                    callback()
+                started.set()
+                release.wait(1.0)
+                return {"data": [{"url": "http://example.test/image.png"}]}
+
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json", handler)
+            task = service.submit_generation(
+                OWNER,
+                client_task_id="queued-then-running",
+                prompt="cat",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+            )
+
+            self.assertEqual(task["status"], "queued")
+            self.assertTrue(started.wait(0.5))
+            running = wait_for_task(service, OWNER, "queued-then-running", "running")
+            self.assertEqual(running["status"], "running")
+
+            release.set()
+            success = wait_for_task(service, OWNER, "queued-then-running", "success")
+            self.assertEqual(success["status"], "success")
+
+    def test_paid_queued_tasks_include_queue_position_and_eta(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            allow_start = threading.Event()
+            allow_finish = threading.Event()
+
+            def handler(payload):
+                callback = payload.get("_task_on_start")
+                allow_start.wait(1.0)
+                if callable(callback):
+                    callback()
+                allow_finish.wait(1.0)
+                return {"data": [{"url": "http://example.test/image.png"}]}
+
+            service = self.make_service(Path(tmp_dir) / "image_tasks.json", handler)
+            first = service.submit_generation(
+                OWNER,
+                client_task_id="paid-queue-1",
+                prompt="cat",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+                generation_mode="paid",
+            )
+            second = service.submit_generation(
+                OWNER,
+                client_task_id="paid-queue-2",
+                prompt="cat",
+                model="gpt-image-2",
+                size=None,
+                base_url="http://local.test",
+                generation_mode="paid",
+            )
+
+            self.assertEqual(first["status"], "queued")
+            self.assertEqual(second["status"], "queued")
+
+            result = service.list_tasks(OWNER, ["paid-queue-1", "paid-queue-2"])
+            items = {item["id"]: item for item in result["items"]}
+            self.assertEqual(items["paid-queue-1"]["queue_position"], 1)
+            self.assertEqual(items["paid-queue-1"]["queue_ahead"], 0)
+            self.assertEqual(items["paid-queue-1"]["queue_total"], 2)
+            self.assertGreaterEqual(items["paid-queue-1"]["estimated_wait_seconds"], 1)
+            self.assertEqual(items["paid-queue-2"]["queue_position"], 2)
+            self.assertEqual(items["paid-queue-2"]["queue_ahead"], 1)
+            self.assertEqual(items["paid-queue-2"]["queue_total"], 2)
+            self.assertGreaterEqual(items["paid-queue-2"]["estimated_wait_seconds"], 1)
+
+            allow_start.set()
+            allow_finish.set()
+            wait_for_task(service, OWNER, "paid-queue-1", "success")
+            wait_for_task(service, OWNER, "paid-queue-2", "success")
 
     def test_startup_marks_unfinished_tasks_as_error(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

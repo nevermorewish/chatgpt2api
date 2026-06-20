@@ -1,51 +1,34 @@
 services:
   app:
-    image: crpi-dzjyl2rfnlfugj1m.cn-shanghai.personal.cr.aliyuncs.com/frogclaw/chatgpt2api:latest
-    container_name: chatgpt2api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: crpi-dzjyl2rfnlfugj1m.cn-shanghai.personal.cr.aliyuncs.com/frogclaw/chatgpt2api:image2-2api
+    container_name: image2-2api
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     ports:
       - "3000:80"
+    env_file:
+      - .env
     volumes:
       - ./data:/app/data
       - ./config.json:/app/config.json
     environment:
       # 存储后端配置 (可选值: json, sqlite, postgres, git)
-      - STORAGE_BACKEND=postgres
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-json}
 
       # 数据库配置 (当 STORAGE_BACKEND=sqlite/postgres 时使用)
-      - DATABASE_URL=postgresql://chatgpt2api:chatgpt2api@postgres:5432/chatgpt2api
-      # - DATABASE_URL=sqlite:///app/data/accounts.db
+      # DATABASE_URL: postgresql://user:password@host:5432/dbname
+      # DATABASE_URL: sqlite:////app/data/accounts.db
 
       # Git 仓库配置 (当 STORAGE_BACKEND=git 时使用)
-      # - GIT_REPO_URL=https://github.com/user/repo.git
-      # - GIT_TOKEN=ghp_xxxxxxxxxxxx
-      # - GIT_BRANCH=main
-      # - GIT_FILE_PATH=accounts.json
+      # GIT_REPO_URL: https://github.com/user/repo.git
+      # GIT_TOKEN: ghp_xxxxxxxxxxxx
+      # GIT_BRANCH: main
+      # GIT_FILE_PATH: accounts.json
 
       # 认证密钥 (可选，覆盖 config.json)
-      - CHATGPT2API_AUTH_KEY=chatgpt2api
+      # CHATGPT2API_AUTH_KEY: your_secret_key
 
       # 基础 URL (可选)
-      # - CHATGPT2API_BASE_URL=https://your-domain.com
-
-  postgres:
-    image: crpi-dzjyl2rfnlfugj1m.cn-shanghai.personal.cr.aliyuncs.com/frogclaw/base-postgres:18-alpine
-    container_name: chatgpt2api-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: chatgpt2api
-      POSTGRES_USER: chatgpt2api
-      POSTGRES_PASSWORD: chatgpt2api
-    volumes:
-      - postgres_data:/var/lib/postgresql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U chatgpt2api -d chatgpt2api"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-volumes:
-  postgres_data:
+      # CHATGPT2API_BASE_URL: https://your-domain.com

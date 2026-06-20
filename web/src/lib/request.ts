@@ -28,7 +28,7 @@ function errorMessageFromValue(value: unknown): string {
     return errorMessageFromValue(item.error);
 }
 
-export const request = axios.create({
+const request = axios.create({
     baseURL: webConfig.apiUrl.replace(/\/$/, ""),
 });
 

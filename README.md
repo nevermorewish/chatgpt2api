@@ -1,235 +1,158 @@
-<h1 align="center">ChatGPT2API</h1>
+# Shour生成图 / image2-2api
 
+`image2-2api` 是 ShourGG 定制维护的在线 AI 生成图平台，基于 `chatgpt2api` 深度改造，面向「网页生成图 + 用户系统 + 积分计费 + OpenAI 兼容图片上游」场景。
 
-<p align="center">ChatGPT2API 主要是对 ChatGPT 官网相关能力进行逆向整理与封装，提供面向 ChatGPT 图片生成、图片编辑、多图组图编辑场景的 OpenAI 兼容图片 API / 代理，并集成在线画图、号池管理、多种账号导入方式与 Docker 自托管部署能力。</p>
+项目内置前台画图、注册登录、账号信息、日志隔离、积分/图币计费、免费号池、OpenAI 兼容图片上游、图片分享页和后台管理能力。
 
-> [!WARNING]
-> 免责声明：
->
-> 本项目涉及对 ChatGPT 官网文本生成、图片生成与图片编辑等相关接口的逆向研究，仅供个人学习、技术研究与非商业性技术交流使用。
->
-> - 严禁将本项目用于任何商业用途、盈利性使用、批量操作、自动化滥用或规模化调用。
-> - 严禁将本项目用于破坏市场秩序、恶意竞争、套利倒卖、二次售卖相关服务，以及任何违反 OpenAI 服务条款或当地法律法规的行为。
-> - 严禁将本项目用于生成、传播或协助生成违法、暴力、色情、未成年人相关内容，或用于诈骗、欺诈、骚扰等非法或不当用途。
-> - 使用者应自行承担全部风险，包括但不限于账号被限制、临时封禁或永久封禁以及因违规使用等所导致的法律责任。
-> - 使用本项目即视为你已充分理解并同意本免责声明全部内容；如因滥用、违规或违法使用造成任何后果，均由使用者自行承担。
-> - 本项目基于对 ChatGPT 官网相关能力的逆向研究实现，存在账号受限、临时封禁或永久封禁的风险。请勿使用你自己的重要账号、常用账号或高价值账号进行测试。
+> 本仓库是 ShourGG 定制维护版，重点服务于 `shour生成图` 的实际部署需求。
 
-## 快速开始
+## 核心能力
 
-### Docker 运行
+### 用户端
 
-```bash
-git clone git@github.com:basketikun/chatgpt2api.git
-cd chatgpt2api
-docker compose up -d
-```
+- 用户注册 / 登录
+- 账号信息页
+- 免费积分与充值图币分离
+- 每个用户独立：
+  - 积分
+  - 图币
+  - 体验券
+  - 画图历史
+  - 日志记录
+- 支持文生图
+- 支持参考图编辑
+- 支持多图参考编辑
+- 支持生成结果继续加入编辑
+- 支持图片结果分享页
+- 支持复制图片地址、复制提示词
 
-启动前请先在 `config.json` 中设置 `auth-key`，也可以在 `docker-compose.yml` 中通过 `CHATGPT2API_AUTH_KEY` 覆盖。
+### 计费与积分
 
-- Web 面板：`http://localhost:3000`
-- API 地址：`http://localhost:3000/v1`
-- 数据目录：`./data`
+- 默认新用户积分
+- 免费生成走积分
+- 充值高清走图币 / 体验券
+- 支持不同尺寸、画质独立定价
+- 支持普通签到
+- 支持赌狗签到
+- 生成失败自动回退积分 / 图币
 
-### WARP / FlareSolverr 稳定代理部署
+### 免费号池
 
-如果注册或图片链路经常遇到 Cloudflare 拦截，可以启用附带的 WARP + Privoxy + FlareSolverr 方案：
+- 免费生成使用共享 ChatGPT 账号池
+- 免费号池并发控制为单任务队列
+- 账号无额度、限流或异常时自动切换可用账号
+- 支持账号健康状态、额度、成功/失败次数统计
 
-```bash
-cp .env.example .env
-docker compose -f docker-compose.warp.yml up -d --build
-```
+### OpenAI 兼容图片上游
 
-该 compose 会启动：
+- 支持自定义 OpenAI 兼容 API Base URL
+- 支持多个上游 key
+- 支持按上游单独配置并发上限
+- 某个上游失败自动切换下一个
+- 所有上游满载时自动排队
+- 支持 `/v1/usage` 额度查询
+- 支持 `gpt-image-2` 等图片模型
 
-- `warp-proxy`：提供 WARP SOCKS5 出口。
-- `privoxy`：把 WARP SOCKS5 转成 HTTP 代理。
-- `flaresolverr`：刷新 Cloudflare clearance。
-- `init-config`：幂等写入 `proxy_runtime` 默认配置。
-- `app`：启动 ChatGPT2API 主服务。
+### 后台管理
 
-默认只让上游 OpenAI / ChatGPT 请求走稳定代理，账号邮箱、CPA 等辅助链路不会被强制接管。账号自身配置的代理优先级最高，其次是稳定代理运行时，再其次是显式代理和旧版全局代理。
+- 系统配置
+- 用户管理
+- 用户积分 / 图币 / 体验券管理
+- ChatGPT 账号池管理
+- CPA / Sub2API 账号导入
+- 图片上游配置
+- 图片资源管理
+- 日志查看
+- 登录 / 注册限流配置
+- 同 IP 成功注册账号数限制
 
-可在 `.env` 中调整端口和代理运行时参数，也可在后台设置页的「稳定代理运行时」面板手动保存、测试代理和测试 clearance。
+## 安全与风控
 
-### 本地开发
+当前内置的注册与访问控制：
 
-启动后端：
+- 登录频率限制
+- 注册频率限制
+- 同 IP 注册尝试限制
+- 同 IP + 同邮箱注册尝试限制
+- 同 IP 成功注册账号数限制，默认 `1`
+- 注册邮箱存在性不直接泄露
+- `/docs`、`/openapi.json` 默认关闭
+- CORS 默认收紧
+- `config.json`、`data/`、本地图片数据建议只保存在部署服务器
 
-```bash
-git clone git@github.com:basketikun/chatgpt2api.git
-cd chatgpt2api
-uv sync
-uv run main.py
-```
+> 建议公网部署时只允许 Cloudflare 或反代访问源站端口，避免客户端伪造 `X-Forwarded-For`。
 
-启动前端：
+## 页面入口
 
-```bash
-cd chatgpt2api/web
-bun install
-bun run dev
-```
+| 页面 | 说明 |
+| --- | --- |
+| `/` | 首页 |
+| `/login` | 登录 |
+| `/signup` | 注册 |
+| `/image` | 用户画图工作台 |
+| `/account` | 用户账号信息 |
+| `/logs` | 用户日志 |
+| `/share` | 公开图片分享页 |
+| `/settings` | 管理后台 |
+| `/accounts` | 账号池管理 |
+| `/image-manager` | 图片资源管理 |
+| `/register` | 注册任务管理 |
 
-后续更新新版本：
+## API 能力
 
-```bash
-docker pull ghcr.io/basketikun/chatgpt2api:latest
-docker-compose down
-docker-compose up -d
+保留 OpenAI 兼容图片接口，便于接入第三方客户端或其他系统。
 
-```
+下面示例使用本地开发端口 `8025`；如果按 Docker 教程部署，请改成 `3000` 或你的域名。
 
-### 存储后端配置
+### 用户注册
 
-支持通过环境变量 `STORAGE_BACKEND` 切换存储方式：
+`/auth/register` 同时支持站点准入码和用户推荐码，两个字段不要混用：
 
-- `json` - 本地 JSON 文件（默认）
-- `sqlite` - 本地 SQLite 数据库
-- `postgres` - 外部 PostgreSQL（需配置 `DATABASE_URL`）
-- `git` - Git 私有仓库（需配置 `GIT_REPO_URL` 和 `GIT_TOKEN`）
-
-示例：使用 PostgreSQL
-
-```yaml
-environment:
-  - STORAGE_BACKEND=postgres
-  - DATABASE_URL=postgresql://user:password@host:5432/dbname
-```
-
-## 功能
-
-### API 兼容能力
-
-- 兼容 `POST /v1/images/generations` 图片生成接口
-- 兼容 `POST /v1/images/edits` 图片编辑接口
-- 兼容面向图片场景的 `POST /v1/chat/completions`
-- 兼容面向图片场景的 `POST /v1/responses`
-- `GET /v1/models` 返回 `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5`、`gpt-5-1`、`gpt-5-2`、`gpt-5-3`、`gpt-5-3-mini`、
-  `gpt-5-mini`
-- 支持通过 `n` 返回多张生成结果
-- 支持生成可编辑 PPT 文件
-- 支持生成可编辑 PSD 文件
-- 支持 Codex 中的画图接口逆向，仅 `Plus` / `Team` / `Pro` 订阅可用，模型别名为 `codex-gpt-image-2`，如有需要可自行在其他场景映射回
-  `gpt-image-2`，用于和官网画图区分；也就意味着同一账号会同时有官网和 Codex 两份生图额度
-
-### 在线画图功能
-
-- 内置在线画图工作台，支持生成、图片编辑与多图组图编辑
-- 支持 `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5`、`gpt-5-1`、`gpt-5-2`、`gpt-5-3`、`gpt-5-3-mini`、`gpt-5-mini` 模型选择
-- 编辑模式支持参考图上传
-- 前端支持多图生成交互
-- 本地保存图片会话历史，支持回看、删除和清空
-- 支持服务端缓存图片URL
-- 图片生成进度追踪，超时后可继续等待
-- 图片懒加载与滚动位置记忆，优化大量图片场景性能
-
-### 号池管理功能
-
-- 自动刷新账号邮箱、类型、额度和恢复时间（异步进度追踪）
-- 轮询可用账号执行图片生成与图片编辑
-- 遇到 Token 失效类错误时自动剔除无效 Token
-- 定时检查限流账号并自动刷新
-- 支持密码重新登录恢复异常账号，刷新后可自动重登
-- 支持网页端配置全局 HTTP / HTTPS / SOCKS5 / SOCKS5H 代理
-- 支持 WARP / FlareSolverr 稳定代理运行时
-- 支持搜索、筛选、批量刷新、导出、手动编辑和清理账号
-- 支持四种导入方式：本地 CPA JSON 文件导入、远程 CPA 服务器导入、`sub2api` 服务器导入、`access_token` 导入
-- 支持在设置页配置 `sub2api` 服务器，筛选并批量导入其中的 OpenAI OAuth 账号
-
-### 实验性 / 规划中
-
-- 详细状态说明见：[功能清单](./docs/feature-status.en.md)
-
-## 效果展示
-
-<table width="100%">
-  <tr>
-    <td width="50%"><img src="https://i.ibb.co/Jj8nfwwP/image.png" alt="image" border="0"></td>
-    <td width="50%"><img src="https://i.ibb.co/pqf235v/image-edit.png" alt="image edit" border="0"></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="https://i.ibb.co/tPcqtVfd/chery-studio.png" alt="chery studio" border="0"></td>
-    <td width="50%"><img src="https://i.ibb.co/PsT9YHBV/account-pool.png" alt="account pool" border="0"></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="https://i.ibb.co/rRWLG08q/new-api.png" alt="new api" border="0"></td>
-  </tr>
-</table>
-
-## API
-
-所有 AI 接口都需要请求头：
-
-```http
-Authorization: Bearer <auth-key>
-```
-
-<details>
-<summary><code>GET /v1/models</code></summary>
-<br>
-
-返回当前暴露的图片模型列表。
+| 字段 | 说明 |
+| --- | --- |
+| `site_invite_code` | 站点邀请码。后台「用户注册设置」里配置的全站统一注册口令，只负责是否允许注册。 |
+| `referral_code` | 推荐人邀请码。已有用户在 `/account` 复制的邀请码，只负责给邀请人返积分。 |
+| `invite_code` | 旧客户端兼容字段，不建议新接入使用。新前端应明确传上面两个字段。 |
 
 ```bash
-curl http://localhost:8000/v1/models \
+curl http://127.0.0.1:8025/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "user@example.com",
+    "password": "secret123",
+    "name": "user",
+    "site_invite_code": "SITE-CODE",
+    "referral_code": "USER-CODE"
+  }'
+```
+
+### 模型列表
+
+```bash
+curl http://127.0.0.1:8025/v1/models \
   -H "Authorization: Bearer <auth-key>"
 ```
 
-<details>
-<summary>说明</summary>
-<br>
-
-| 字段   | 说明                                                                                                         |
-|:-----|:-----------------------------------------------------------------------------------------------------------|
-| 返回模型 | `gpt-image-2`、`codex-gpt-image-2`、`auto`、`gpt-5`、`gpt-5-1`、`gpt-5-2`、`gpt-5-3`、`gpt-5-3-mini`、`gpt-5-mini` |
-| 接入场景 | 可接入 Cherry Studio、New API 等上游或客户端                                                                          |
-
-<br>
-</details>
-</details>
-
-<details>
-<summary><code>POST /v1/images/generations</code></summary>
-<br>
-
-OpenAI 兼容图片生成接口，用于文生图。
+### 文生图
 
 ```bash
-curl http://localhost:8000/v1/images/generations \
+curl http://127.0.0.1:8025/v1/images/generations \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <auth-key>" \
   -d '{
     "model": "gpt-image-2",
-    "prompt": "一只漂浮在太空里的猫",
+    "prompt": "一张高级质感的未来城市海报",
     "n": 1,
-    "response_format": "b64_json"
+    "size": "1024x1024",
+    "quality": "standard",
+    "response_format": "url"
   }'
 ```
 
-<details>
-<summary>字段说明</summary>
-<br>
-
-| 字段                | 说明                                                 |
-|:------------------|:---------------------------------------------------|
-| `model`           | 图片模型，当前可用值以 `/v1/models` 返回结果为准，推荐使用 `gpt-image-2` |
-| `prompt`          | 图片生成提示词                                            |
-| `n`               | 生成数量，当前后端限制为 `1-4`                                 |
-| `response_format` | 当前请求模型中包含该字段，默认值为 `b64_json`                       |
-
-<br>
-</details>
-</details>
-
-<details>
-<summary><code>POST /v1/images/edits</code></summary>
-<br>
-
-OpenAI 兼容图片编辑接口，可上传图片文件，也可按官方 JSON 格式传入图片链接并生成编辑结果。
+### 图片编辑
 
 ```bash
-curl http://localhost:8000/v1/images/edits \
+curl http://127.0.0.1:8025/v1/images/edits \
   -H "Authorization: Bearer <auth-key>" \
   -F "model=gpt-image-2" \
   -F "prompt=把这张图改成赛博朋克夜景风格" \
@@ -237,89 +160,14 @@ curl http://localhost:8000/v1/images/edits \
   -F "image=@./input.png"
 ```
 
-也可以直接传图片 URL：
+### Responses 图片工具兼容
 
 ```bash
-curl http://localhost:8000/v1/images/edits \
-  -H "Authorization: Bearer <auth-key>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-image-2",
-    "prompt": "把这张图改成赛博朋克夜景风格",
-    "images": [
-      {"image_url": "https://example.com/input.png"}
-    ]
-  }'
-```
-
-<details>
-<summary>字段说明</summary>
-<br>
-
-| 字段          | 说明                                            |
-|:------------|:----------------------------------------------|
-| `model`     | 图片模型， `gpt-image-2`                           |
-| `prompt`    | 图片编辑提示词                                       |
-| `n`         | 生成数量，当前后端限制为 `1-4`                            |
-| `image`     | 需要编辑的图片文件，使用 multipart/form-data 上传           |
-| `images`    | JSON 图片引用数组，支持 `{"image_url": "https://..."}` |
-| `image_url` | 表单模式下也可直接传图片链接，支持重复字段传多张图                     |
-
-<br>
-</details>
-</details>
-
-<details>
-<summary><code>POST /v1/chat/completions</code></summary>
-<br>
-
-面向文本、网页搜索与图片场景的 Chat Completions 兼容接口，不是完整通用聊天代理。
-
-```bash
-curl http://localhost:8000/v1/chat/completions \
+curl http://127.0.0.1:8025/v1/responses \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <auth-key>" \
   -d '{
     "model": "gpt-image-2",
-    "messages": [
-      {
-        "role": "user",
-        "content": "生成一张雨夜东京街头的赛博朋克猫"
-      }
-    ],
-    "n": 1
-  }'
-```
-
-<details>
-<summary>字段说明</summary>
-<br>
-
-| 字段                   | 说明                                                                           |
-|:---------------------|:-----------------------------------------------------------------------------|
-| `model`              | 文本、搜索或图片模型；搜索模型会触发网页搜索兼容逻辑                                                   |
-| `messages`           | 消息数组，支持文本、搜索和图片请求内容                                                          |
-| `n`                  | 图片生成数量，按当前实现解析为图片数量                                                          |
-| `stream`             | 文本、搜索和图片场景均支持，仍在测试                                                           |
-| `tools`              | 文本场景支持 `web_search` / `web_search_preview` / `web_search_preview_2025_03_11` |
-| `web_search_options` | 传入时会触发网页搜索兼容逻辑                                                               |
-
-<br>
-</details>
-</details>
-
-<details>
-<summary><code>POST /v1/responses</code></summary>
-<br>
-
-面向文本、网页搜索和图片生成工具调用的 Responses API 兼容接口，不是完整通用 Responses API 代理。
-
-```bash
-curl http://localhost:8000/v1/responses \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <auth-key>" \
-  -d '{
-    "model": "gpt-5",
     "input": "生成一张未来感城市天际线图片",
     "tools": [
       {
@@ -329,33 +177,236 @@ curl http://localhost:8000/v1/responses \
   }'
 ```
 
-<details>
-<summary>字段说明</summary>
-<br>
+## 新手部署教程
 
-| 字段       | 说明                                                                                      |
-|:---------|:----------------------------------------------------------------------------------------|
-| `model`  | 响应中会回显该模型字段，搜索和图片生成会走对应兼容逻辑                                                             |
-| `input`  | 输入内容；搜索使用最后一条用户文本，图片生成需能解析出提示词                                                          |
-| `tools`  | 支持 `image_generation`、`web_search`、`web_search_preview`、`web_search_preview_2025_03_11` |
-| `stream` | 已实现，但仍在测试                                                                               |
+如果你第一次部署，推荐直接用 Docker Compose。下面按「一台新服务器」来写。
 
-<br>
-</details>
-</details>
+### 1. 准备服务器
 
-## 社区支持
+- 推荐系统：Ubuntu 22.04 / Debian 12
+- 推荐配置：2 核 2G 起步
+- 需要开放端口：
+  - `80` / `443`：绑定域名后访问
+  - `3000`：不配域名时临时访问
 
-学 AI , 上 L 站：[LinuxDO](https://linux.do)
+### 2. 安装 Docker
 
-## Contributors
+```bash
+curl -fsSL https://get.docker.com | bash
+systemctl enable --now docker
 
-感谢所有为本项目做出贡献的开发者：
+docker --version
+docker compose version
+```
 
-<a href="https://github.com/basketikun/chatgpt2api/graphs/contributors">
-  <img alt="Contributors" src="https://contrib.rocks/image?repo=basketikun/chatgpt2api" />
-</a>
+### 3. 拉取项目
 
-## Star History
+```bash
+git clone https://github.com/ShourGG/image2-2api.git
+cd image2-2api
+```
 
-[![Star History Chart](https://api.star-history.com/chart?repos=basketikun/chatgpt2api&type=date&legend=top-left)](https://www.star-history.com/?repos=basketikun%2Fchatgpt2api&type=date&legend=top-left)
+### 4. 创建配置文件
+
+```bash
+cp .env.example .env
+printf '{}\n' > config.json
+mkdir -p data
+```
+
+编辑 `.env`：
+
+```bash
+nano .env
+```
+
+至少修改后台密钥：
+
+```env
+CHATGPT2API_AUTH_KEY=换成你自己的后台密钥
+STORAGE_BACKEND=json
+```
+
+如果你已经绑定域名，再加上：
+
+```env
+CHATGPT2API_BASE_URL=https://你的域名
+```
+
+### 5. 启动服务
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+启动后先用浏览器打开：
+
+```text
+http://服务器IP:3000
+```
+
+### 6. 第一次进入后台
+
+后台入口：
+
+```text
+http://服务器IP:3000/settings
+```
+
+首次初始化时需要填写的后台密钥就是 `.env` 里的 `CHATGPT2API_AUTH_KEY`；初始化完成后，管理员使用邮箱密码登录。
+
+进入后台后建议先配置：
+
+1. 图片生成方式
+   - 免费模式：导入 ChatGPT 账号池
+   - 充值高清：添加 OpenAI 兼容图片上游
+2. OpenAI 兼容图片上游
+   - Base URL
+   - API Key
+   - 图片模型，例如 `gpt-image-2`
+   - 单个上游并发上限
+3. 用户计费
+   - 免费积分价格
+   - 图币价格
+   - 体验券规则
+4. 注册风控
+   - 单 IP 注册数量
+   - 登录 / 注册限流
+
+### 7. 绑定域名反代
+
+Nginx 示例：
+
+```nginx
+server {
+    listen 80;
+    server_name image.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+配置完成后把 `.env` 里的公开地址改成你的域名：
+
+```env
+CHATGPT2API_BASE_URL=https://image.example.com
+```
+
+然后重启：
+
+```bash
+docker compose restart
+```
+
+### 8. 常用命令
+
+```bash
+# 查看运行状态
+docker compose ps
+
+# 查看实时日志
+docker compose logs -f --tail=100
+
+# 重启服务
+docker compose restart
+
+# 停止服务
+docker compose down
+```
+
+## 本地开发运行
+
+### 后端
+
+```bash
+cd /root/chatgpt2api
+
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+export CHATGPT2API_AUTH_KEY="your-admin-key"
+uvicorn main:app --host 0.0.0.0 --port 8025
+```
+
+### 前端构建
+
+```bash
+cd /root/chatgpt2api/web
+npm install
+npm run build
+```
+
+前端静态产物会输出到：
+
+```text
+web/out
+```
+
+后端通过 `web_dist` 软链接或目录提供静态页面。
+
+## 存储后端
+
+支持以下存储方式：
+
+| 后端 | 说明 |
+| --- | --- |
+| `json` | 本地 JSON 文件，默认 |
+| `sqlite` | 本地 SQLite |
+| `postgres` | PostgreSQL |
+| `git` | Git 私有仓库存储 |
+
+示例：
+
+```yaml
+environment:
+  - STORAGE_BACKEND=postgres
+  - DATABASE_URL=postgresql://user:password@host:5432/dbname
+```
+
+## 重要配置
+
+### 基础配置
+
+| 配置 | 说明 |
+| --- | --- |
+| `CHATGPT2API_AUTH_KEY` | 后台初始化密钥 |
+| `CHATGPT2API_BASE_URL` | 图片公开访问地址 |
+| `STORAGE_BACKEND` | 存储后端 |
+| `DATABASE_URL` | 数据库连接 |
+
+### 图片生成策略
+
+| 配置 | 说明 |
+| --- | --- |
+| `image_generation_strategy` | 生图方式 |
+| `image_generation_api_upstreams` | OpenAI 兼容图片上游列表 |
+| `max_concurrency` | 单个上游并发上限 |
+| `image_retention_days` | 图片保留天数 |
+
+### 注册风控
+
+| 配置 | 默认 | 说明 |
+| --- | --- | --- |
+| `auth_register_ip_account_limit` | `1` | 同 IP 最多成功注册账号数 |
+| `auth_rate_limit_register_ip_limit` | `10` | 同 IP 注册尝试次数 |
+| `auth_rate_limit_register_ip_window_seconds` | `1800` | 同 IP 注册窗口 |
+| `auth_rate_limit_login_ip_limit` | `30` | 同 IP 登录尝试次数 |
+| `auth_rate_limit_login_ip_window_seconds` | `300` | 同 IP 登录窗口 |
+
+## 项目归属
+
+维护者：
+
+- GitHub: [ShourGG](https://github.com/ShourGG)
+- Project: [image2-2api](https://github.com/ShourGG/image2-2api)
+
+本项目基于 `chatgpt2api` 进行定制开发，当前 README 面向 `shour生成图` 部署版本编写。

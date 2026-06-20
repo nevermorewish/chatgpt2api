@@ -4,16 +4,13 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 os.environ.setdefault("CHATGPT2API_AUTH_KEY", "test-auth")
 
 from services.account_service import AccountService
 from services.auth_service import AuthService
-from services.config import config
-from services.openai_backend_api import InvalidAccessTokenError
 from services.storage.json_storage import JSONStorageBackend
-from utils.helper import anonymize_token, split_image_model
+from utils.helper import anonymize_token
 
 
 class AccountCapabilityTests(unittest.TestCase):
@@ -69,82 +66,52 @@ class AccountCapabilityTests(unittest.TestCase):
             self.assertEqual(updated["status"], "正常")
             self.assertTrue(updated["image_quota_unknown"])
 
-    def test_split_image_model_supports_plan_type_prefix(self) -> None:
-        self.assertEqual(split_image_model("gpt-image-2"), (None, "gpt-image-2"))
-        self.assertEqual(split_image_model("plus-codex-gpt-image-2"), ("plus", "codex-gpt-image-2"))
-        self.assertEqual(split_image_model("team-codex-gpt-image-2"), ("team", "codex-gpt-image-2"))
-        self.assertEqual(split_image_model("pro-codex-gpt-image-2"), ("pro", "codex-gpt-image-2"))
-        self.assertEqual(split_image_model("plus-gpt-image-2"), (None, None))
-        self.assertEqual(split_image_model("unknown-image-model"), (None, None))
-
-    def test_get_available_access_token_filters_by_plan_type(self) -> None:
+    def test_image_account_selection_uses_shared_pool_for_user_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
-            service.add_account_items(
-                [
-                    {"access_token": "token-plus", "type": "Plus", "status": "正常", "quota": 3},
-                    {"access_token": "token-pro", "type": "Pro", "status": "正常", "quota": 3},
-                ]
-            )
+            service.add_accounts(["token-1", "token-2"])
+            service.update_account("token-1", {"quota": 1, "owner_user_id": "user-a"})
+            service.update_account("token-2", {"quota": 1, "owner_user_id": "user-b"})
 
-            service.fetch_remote_info = lambda access_token, event="fetch_remote_info": service.get_account(access_token)
+            picked = service._pick_next_candidate_token(identity={"role": "user", "id": "user-b"})
+            service.release_access_token(picked)
 
-            plus_token = service.get_available_access_token(plan_type="plus")
-            pro_token = service.get_available_access_token(plan_type="pro")
-            service.release_image_slot(plus_token)
-            service.release_image_slot(pro_token)
+            self.assertEqual(picked, "token-1")
+            self.assertTrue(service.has_available_account({"role": "user", "id": "user-a"}))
+            self.assertTrue(service.has_available_account({"role": "user", "id": "user-b"}))
+            self.assertTrue(service.has_available_account({"role": "user", "id": "missing"}))
 
-            self.assertEqual(plus_token, "token-plus")
-            self.assertEqual(pro_token, "token-pro")
+    def test_user_selection_can_use_unowned_image_account(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_accounts(["token-1", "token-2"])
+            service.update_account("token-1", {"quota": 0, "status": "限流"})
+            service.update_account("token-2", {"quota": 2, "status": "正常"})
 
-    def test_refresh_accounts_can_remove_invalid_token_without_confirmation_delay(self) -> None:
-        original_value = config.data.get("auto_remove_invalid_accounts")
-        config.data["auto_remove_invalid_accounts"] = True
-        try:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
-                service.add_account_items([{"access_token": "invalid-token", "status": "正常"}])
+            picked = service._pick_next_candidate_token(identity={"role": "user", "id": "user-a"})
+            service.release_access_token(picked)
 
-                with patch(
-                    "services.openai_backend_api.OpenAIBackendAPI.get_user_info",
-                    side_effect=InvalidAccessTokenError("token invalidated (/backend-api/me)"),
-                ):
-                    result = service.refresh_accounts(["invalid-token"], defer_invalid_removal=False)
+            self.assertEqual(picked, "token-2")
+            self.assertIsNone(service.get_account("token-2")["owner_user_id"])
+            self.assertTrue(service.has_available_account({"role": "user", "id": "user-a"}))
+            self.assertTrue(service.has_available_account({"role": "user", "id": "user-b"}))
+            self.assertTrue(service.has_available_account({"role": "admin", "id": "admin"}))
 
-                self.assertEqual(result["refreshed"], 0)
-                self.assertEqual(len(result["errors"]), 1)
-                self.assertEqual(result["items"], [])
-                self.assertIsNone(service.get_account("invalid-token"))
-        finally:
-            if original_value is None:
-                config.data.pop("auto_remove_invalid_accounts", None)
-            else:
-                config.data["auto_remove_invalid_accounts"] = original_value
+    def test_busy_token_blocks_second_selection_until_released(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
+            service.add_accounts(["token-1"])
+            service.update_account("token-1", {"quota": 1, "status": "正常"})
 
-    def test_refresh_accounts_defers_invalid_token_removal_by_default(self) -> None:
-        original_value = config.data.get("auto_remove_invalid_accounts")
-        config.data["auto_remove_invalid_accounts"] = True
-        try:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                service = AccountService(JSONStorageBackend(Path(tmp_dir) / "accounts.json"))
-                service.add_account_items([{"access_token": "invalid-token", "status": "正常"}])
+            first = service._pick_next_candidate_token(identity={"role": "user", "id": "user-a"})
 
-                with patch(
-                    "services.openai_backend_api.OpenAIBackendAPI.get_user_info",
-                    side_effect=InvalidAccessTokenError("token invalidated (/backend-api/me)"),
-                ):
-                    result = service.refresh_accounts(["invalid-token"])
+            with self.assertRaisesRegex(RuntimeError, "busy"):
+                service._pick_next_candidate_token(identity={"role": "user", "id": "user-b"})
 
-                account = service.get_account("invalid-token")
-                self.assertEqual(result["refreshed"], 0)
-                self.assertEqual(len(result["errors"]), 1)
-                self.assertIsNotNone(account)
-                self.assertEqual(account["invalid_count"], 1)
-        finally:
-            if original_value is None:
-                config.data.pop("auto_remove_invalid_accounts", None)
-            else:
-                config.data["auto_remove_invalid_accounts"] = original_value
+            service.release_access_token(first)
+            second = service._pick_next_candidate_token(identity={"role": "user", "id": "user-b"})
+            service.release_access_token(second)
+            self.assertEqual(second, "token-1")
 
 
 class TokenLogTests(unittest.TestCase):
@@ -199,35 +166,59 @@ class AuthServiceTests(unittest.TestCase):
             self.assertEqual(authed["id"], item["id"])
             self.assertIsNotNone(authed["last_used_at"])
 
-    def test_update_user_key_replaces_raw_key(self) -> None:
+    def test_register_user_limits_successful_accounts_per_ip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
-            item, raw_key = service.create_key(role="user", name="Alice")
 
-            updated = service.update_key(item["id"], {"key": "sk-user-custom-key"}, role="user")
+            first, _ = service.register_user(
+                email="a@example.com",
+                password="secret1",
+                registration_ip="203.0.113.10",
+                registration_ip_limit=1,
+            )
 
-            self.assertIsNotNone(updated)
-            self.assertIsNone(service.authenticate(raw_key))
+            self.assertEqual(first["registration_ip"], "203.0.113.10")
+            with self.assertRaisesRegex(ValueError, "registration ip limit reached"):
+                service.register_user(
+                    email="b@example.com",
+                    password="secret1",
+                    registration_ip="203.0.113.10",
+                    registration_ip_limit=1,
+                )
 
-            authed = service.authenticate("sk-user-custom-key")
-            self.assertIsNotNone(authed)
-            self.assertEqual(authed["id"], item["id"])
+            second, _ = service.register_user(
+                email="c@example.com",
+                password="secret1",
+                registration_ip="203.0.113.11",
+                registration_ip_limit=1,
+            )
+            self.assertEqual(second["registration_ip"], "203.0.113.11")
 
-    def test_user_key_name_must_be_unique(self) -> None:
+    def test_register_user_applies_referral_reward_to_referrer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             service = AuthService(JSONStorageBackend(Path(tmp_dir) / "accounts.json", Path(tmp_dir) / "auth_keys.json"))
-            first, _ = service.create_key(role="user", name="Alice")
-            second, _ = service.create_key(role="user", name="Bob")
 
-            with self.assertRaisesRegex(ValueError, "这个名称已经在使用中了"):
-                service.create_key(role="user", name="Alice")
+            referrer, _ = service.register_user(
+                email="referrer@example.com",
+                password="secret1",
+                initial_points=20,
+            )
+            invited, _ = service.register_user(
+                email="invited@example.com",
+                password="secret1",
+                referrer_user_id=str(referrer["id"]),
+                referral_reward_points=12.5,
+            )
 
-            with self.assertRaisesRegex(ValueError, "这个名称已经在使用中了"):
-                service.update_key(second["id"], {"name": "Alice"}, role="user")
+            updated_referrer = service.get_user(str(referrer["id"]))
 
-            updated = service.update_key(first["id"], {"name": "Alice"}, role="user")
-            self.assertIsNotNone(updated)
-            self.assertEqual(updated["name"], "Alice")
+            self.assertEqual(invited["invited_by_user_id"], referrer["id"])
+            self.assertEqual(invited["invited_by_invite_code"], referrer["invite_code"])
+            self.assertIsNotNone(updated_referrer)
+            self.assertEqual(updated_referrer["points"], 32.5)
+            self.assertEqual(updated_referrer["referral_count"], 1)
+            self.assertEqual(updated_referrer["referral_points_earned"], 12.5)
+            self.assertIsNotNone(updated_referrer["last_referral_at"])
 
 
 if __name__ == "__main__":

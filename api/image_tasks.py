@@ -1,30 +1,65 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
+import json
 
-from api.image_inputs import parse_image_edit_request, read_image_sources
-from api.support import require_identity, resolve_image_base_url
+from api.support import ensure_upload_count, read_validated_image_upload, require_identity, resolve_image_base_url
 from services.content_filter import check_request
+from services.image_file_utils import MAX_IMAGE_BATCH_TASKS, MAX_IMAGE_PROMPT_LENGTH, MAX_IMAGE_TASK_ID_LENGTH
 from services.image_task_service import image_task_service
 from services.log_service import LoggedCall
 
 
 class ImageGenerationTaskRequest(BaseModel):
-    client_task_id: str = Field(..., min_length=1)
-    prompt: str = Field(..., min_length=1)
+    client_task_id: str = Field(..., min_length=1, max_length=MAX_IMAGE_TASK_ID_LENGTH)
+    prompt: str = Field(..., min_length=1, max_length=MAX_IMAGE_PROMPT_LENGTH)
     model: str = "gpt-image-2"
     size: str | None = None
-    quality: str = "auto"
+    quality: str | None = None
+    generation_mode: str | None = None
 
 
-class ResumePollRequest(BaseModel):
-    extra_timeout_secs: float = Field(default=30.0, ge=5.0, le=120.0)
+class ImageGenerationTaskBatchRequest(BaseModel):
+    client_task_ids: list[str] = Field(..., min_length=1, max_length=MAX_IMAGE_BATCH_TASKS)
+    prompt: str = Field(..., min_length=1, max_length=MAX_IMAGE_PROMPT_LENGTH)
+    model: str = "gpt-image-2"
+    size: str | None = None
+    quality: str | None = None
+    generation_mode: str | None = None
 
 
 def _parse_task_ids(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _normalize_client_task_ids(value: object) -> list[str]:
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(item or "").strip() for item in parsed if str(item or "").strip()]
+        return _parse_task_ids(raw)
+    if isinstance(value, list):
+        return [str(item or "").strip() for item in value if str(item or "").strip()]
+    return []
+
+
+def _validate_client_task_ids(value: list[str]) -> list[str]:
+    task_ids = [item for item in value if item]
+    if not task_ids:
+        raise HTTPException(status_code=400, detail={"error": "client_task_ids is required"})
+    if len(task_ids) > MAX_IMAGE_BATCH_TASKS:
+        raise HTTPException(status_code=400, detail={"error": f"too many image tasks, max {MAX_IMAGE_BATCH_TASKS}"})
+    if any(len(item) > MAX_IMAGE_TASK_ID_LENGTH for item in task_ids):
+        raise HTTPException(status_code=400, detail={"error": f"client_task_id is too long, max {MAX_IMAGE_TASK_ID_LENGTH}"})
+    return task_ids
 
 
 async def filter_or_log(call: LoggedCall, text: str) -> None:
@@ -53,7 +88,7 @@ def create_router() -> APIRouter:
         authorization: str | None = Header(default=None),
     ):
         identity = require_identity(authorization)
-        await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务", request_text=body.prompt), body.prompt)
+        await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations", body.model, "文生图任务"), body.prompt)
         try:
             return await run_in_threadpool(
                 image_task_service.submit_generation,
@@ -63,6 +98,31 @@ def create_router() -> APIRouter:
                 model=body.model,
                 size=body.size,
                 quality=body.quality,
+                generation_mode=body.generation_mode,
+                base_url=resolve_image_base_url(request),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+    @router.post("/api/image-tasks/generations/batch")
+    async def create_generation_task_batch(
+        body: ImageGenerationTaskBatchRequest,
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ):
+        identity = require_identity(authorization)
+        task_ids = _validate_client_task_ids(_normalize_client_task_ids(body.client_task_ids))
+        await filter_or_log(LoggedCall(identity, "/api/image-tasks/generations/batch", body.model, "文生图批量任务"), body.prompt)
+        try:
+            return await run_in_threadpool(
+                image_task_service.submit_generation_batch,
+                identity,
+                client_task_ids=task_ids,
+                prompt=body.prompt,
+                model=body.model,
+                size=body.size,
+                quality=body.quality,
+                generation_mode=body.generation_mode,
                 base_url=resolve_image_base_url(request),
             )
         except ValueError as exc:
@@ -72,17 +132,24 @@ def create_router() -> APIRouter:
     async def create_edit_task(
         request: Request,
         authorization: str | None = Header(default=None),
+        image: list[UploadFile] | None = File(default=None),
+        image_list: list[UploadFile] | None = File(default=None, alias="image[]"),
+        client_task_id: str = Form(..., max_length=MAX_IMAGE_TASK_ID_LENGTH),
+        prompt: str = Form(..., max_length=MAX_IMAGE_PROMPT_LENGTH),
+        model: str = Form(default="gpt-image-2"),
+        size: str | None = Form(default=None),
+        quality: str | None = Form(default=None),
+        generation_mode: str | None = Form(default=None),
     ):
         identity = require_identity(authorization)
-        payload, image_sources, mask_sources = await parse_image_edit_request(request)
-        client_task_id = str(payload.get("client_task_id") or "").strip()
-        if not client_task_id:
-            raise HTTPException(status_code=400, detail={"error": "client_task_id is required"})
-        prompt = str(payload["prompt"])
-        model = str(payload["model"])
-        await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits", model, "图生图任务", request_text=prompt), prompt)
-        images = await read_image_sources(image_sources)
-        masks = await read_image_sources(mask_sources) if mask_sources else None
+        await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits", model, "图生图任务"), prompt)
+        uploads = [*(image or []), *(image_list or [])]
+        if not uploads:
+            raise HTTPException(status_code=400, detail={"error": "image file is required"})
+        ensure_upload_count(uploads)
+        images: list[tuple[bytes, str, str]] = []
+        for upload in uploads:
+            images.append(await read_validated_image_upload(upload))
         try:
             return await run_in_threadpool(
                 image_task_service.submit_edit,
@@ -90,29 +157,50 @@ def create_router() -> APIRouter:
                 client_task_id=client_task_id,
                 prompt=prompt,
                 model=model,
-                size=payload["size"],
-                quality=payload["quality"],
+                size=size,
+                quality=quality,
+                generation_mode=generation_mode,
                 base_url=resolve_image_base_url(request),
                 images=images,
-                masks=masks,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
-    @router.post("/api/image-tasks/{task_id}/resume-poll")
-    async def resume_image_poll(
-        task_id: str,
-        body: ResumePollRequest,
+    @router.post("/api/image-tasks/edits/batch")
+    async def create_edit_task_batch(
         request: Request,
         authorization: str | None = Header(default=None),
+        image: list[UploadFile] | None = File(default=None),
+        image_list: list[UploadFile] | None = File(default=None, alias="image[]"),
+        client_task_ids: str = Form(...),
+        prompt: str = Form(..., max_length=MAX_IMAGE_PROMPT_LENGTH),
+        model: str = Form(default="gpt-image-2"),
+        size: str | None = Form(default=None),
+        quality: str | None = Form(default=None),
+        generation_mode: str | None = Form(default=None),
     ):
         identity = require_identity(authorization)
+        normalized_task_ids = _validate_client_task_ids(_normalize_client_task_ids(client_task_ids))
+        await filter_or_log(LoggedCall(identity, "/api/image-tasks/edits/batch", model, "图生图批量任务"), prompt)
+        uploads = [*(image or []), *(image_list or [])]
+        if not uploads:
+            raise HTTPException(status_code=400, detail={"error": "image file is required"})
+        ensure_upload_count(uploads)
+        images: list[tuple[bytes, str, str]] = []
+        for upload in uploads:
+            images.append(await read_validated_image_upload(upload))
         try:
             return await run_in_threadpool(
-                image_task_service.resume_poll,
+                image_task_service.submit_edit_batch,
                 identity,
-                task_id,
-                body.extra_timeout_secs,
+                client_task_ids=normalized_task_ids,
+                prompt=prompt,
+                model=model,
+                size=size,
+                quality=quality,
+                generation_mode=generation_mode,
+                base_url=resolve_image_base_url(request),
+                images=images,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc

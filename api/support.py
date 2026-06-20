@@ -2,15 +2,23 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Event, Thread
+from urllib.parse import urlsplit
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, UploadFile
 
 from services.account_service import account_service
 from services.auth_service import auth_service
 from services.config import config
+from services.image_file_utils import (
+    MAX_UPLOAD_IMAGE_BYTES,
+    MAX_UPLOAD_IMAGE_COUNT,
+    sniff_image_mime_and_extension,
+)
+from services.public_error import sanitize_public_error_message
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 WEB_DIST_DIR = BASE_DIR / "web_dist"
+LOCAL_PUBLIC_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 
 def extract_bearer_token(authorization: str | None) -> str:
@@ -29,9 +37,9 @@ def _legacy_admin_identity(token: str) -> dict[str, object] | None:
 
 def require_identity(authorization: str | None) -> dict[str, object]:
     token = extract_bearer_token(authorization)
-    identity = _legacy_admin_identity(token) or auth_service.authenticate(token)
+    identity = _legacy_admin_identity(token) or auth_service.authenticate(token) or auth_service.authenticate_session(token)
     if identity is None:
-        raise HTTPException(status_code=401, detail={"error": "密钥无效或已失效，请重新登录"})
+        raise HTTPException(status_code=401, detail={"error": "authorization is invalid"})
     return identity
 
 
@@ -42,19 +50,86 @@ def require_auth_key(authorization: str | None) -> None:
 def require_admin(authorization: str | None) -> dict[str, object]:
     identity = require_identity(authorization)
     if identity.get("role") != "admin":
-        raise HTTPException(status_code=403, detail={"error": "需要管理员权限才能执行这个操作"})
+        raise HTTPException(status_code=403, detail={"error": "admin permission required"})
     return identity
 
 
+def _host_name(value: str) -> str:
+    host = str(value or "").strip().lower()
+    if not host:
+        return ""
+    if host.startswith("[") and "]" in host:
+        return host[1:host.index("]")]
+    if host.count(":") > 1:
+        return host
+    return host.rsplit(":", 1)[0] if ":" in host else host
+
+
+def _is_local_public_host(value: str) -> bool:
+    host = _host_name(value)
+    return host in LOCAL_PUBLIC_HOSTS or host.startswith("127.")
+
+
+def _validated_configured_base_url() -> str:
+    base_url = str(config.base_url or "").strip().rstrip("/")
+    if not base_url:
+        return ""
+    parsed = urlsplit(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=500, detail={"error": "base_url 配置不正确"})
+    return base_url
+
+
+def resolve_public_base_url(request: Request) -> str:
+    configured = _validated_configured_base_url()
+    if configured:
+        return configured
+
+    host = str(request.headers.get("host") or request.url.netloc or "").strip()
+    if host and _is_local_public_host(host):
+        return f"{request.url.scheme}://{host}".rstrip("/")
+
+    raise HTTPException(status_code=500, detail={"error": "base_url 未配置，不能从请求 Host 生成公开地址"})
+
+
 def resolve_image_base_url(request: Request) -> str:
-    return config.base_url or f"{request.url.scheme}://{request.headers.get('host', request.url.netloc)}"
+    return resolve_public_base_url(request)
 
 
 def raise_image_quota_error(exc: Exception) -> None:
     message = str(exc)
     if "no available image quota" in message.lower():
-        raise HTTPException(status_code=429, detail={"error": "no available image quota"}) from exc
-    raise HTTPException(status_code=502, detail={"error": message}) from exc
+        raise HTTPException(status_code=429, detail={"error": sanitize_public_error_message(message)}) from exc
+    if "pool is busy" in message.lower() or "正在忙碌" in message:
+        raise HTTPException(status_code=429, detail={"error": sanitize_public_error_message(message)}) from exc
+    raise HTTPException(status_code=502, detail={"error": sanitize_public_error_message(message)}) from exc
+
+
+def ensure_upload_count(uploads: list[UploadFile]) -> None:
+    if len(uploads) > MAX_UPLOAD_IMAGE_COUNT:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"too many image files, max {MAX_UPLOAD_IMAGE_COUNT}"},
+        )
+
+
+async def read_validated_image_upload(upload: UploadFile) -> tuple[bytes, str, str]:
+    image_data = await upload.read(MAX_UPLOAD_IMAGE_BYTES + 1)
+    if not image_data:
+        raise HTTPException(status_code=400, detail={"error": "image file is empty"})
+    if len(image_data) > MAX_UPLOAD_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": f"image file is too large, max {MAX_UPLOAD_IMAGE_BYTES // 1024 // 1024}MB"},
+        )
+    detected = sniff_image_mime_and_extension(image_data)
+    if not detected:
+        raise HTTPException(status_code=400, detail={"error": "invalid image file"})
+    mime_type, extension = detected
+    filename = Path(str(upload.filename or f"image{extension}")).name or f"image{extension}"
+    if "." not in filename:
+        filename = f"{filename}{extension}"
+    return image_data, mime_type, filename
 
 
 def sanitize_cpa_pool(pool: dict | None) -> dict | None:
@@ -86,30 +161,14 @@ def start_limited_account_watcher(stop_event: Event) -> Thread:
         while not stop_event.is_set():
             try:
                 limited_tokens = account_service.list_limited_tokens()
-                normal_tokens = account_service.list_normal_tokens()
-                expiring_tokens = account_service.list_expiring_access_tokens()
-                keepalive_tokens = account_service.list_refresh_token_keepalive_tokens()
-                tokens = list(dict.fromkeys([*limited_tokens, *normal_tokens, *expiring_tokens]))
-                expiring_token_set = set(expiring_tokens)
-                keepalive_tokens = [token for token in keepalive_tokens if token not in expiring_token_set]
-                if tokens:
-                    print(
-                        "[account-watcher] checking "
-                        f"{len(limited_tokens)} limited accounts, "
-                        f"{len(normal_tokens)} normal accounts, "
-                        f"{len(expiring_tokens)} expiring access tokens"
-                    )
-                    account_service.refresh_accounts(tokens)
-                if keepalive_tokens:
-                    print(f"[account-watcher] keepalive {len(keepalive_tokens)} refresh tokens")
-                    result = account_service.keepalive_refresh_tokens(keepalive_tokens)
-                    if result.get("errors"):
-                        print(f"[account-watcher] keepalive errors: {result['errors']}")
+                if limited_tokens:
+                    print(f"[account-limited-watcher] checking {len(limited_tokens)} limited accounts")
+                    account_service.refresh_accounts(limited_tokens)
             except Exception as exc:
-                print(f"[account-watcher] fail {exc}")
+                print(f"[account-limited-watcher] fail {exc}")
             stop_event.wait(interval_seconds)
 
-    thread = Thread(target=worker, name="account-watcher", daemon=True)
+    thread = Thread(target=worker, name="limited-account-watcher", daemon=True)
     thread.start()
     return thread
 

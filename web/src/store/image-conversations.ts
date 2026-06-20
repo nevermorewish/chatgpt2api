@@ -2,7 +2,7 @@
 
 import localforage from "localforage";
 
-import type { ImageModel } from "@/lib/api";
+import type { ImageGenerationMode, ImageModel, ImageQuality } from "@/lib/api";
 
 export type ImageConversationMode = "generate" | "edit";
 
@@ -17,15 +17,14 @@ export type StoredImage = {
   taskId?: string;
   status?: "loading" | "success" | "error";
   taskStatus?: "queued" | "running";
-  progress?: string;
+  queuePosition?: number;
+  queueAhead?: number;
+  queueTotal?: number;
+  estimatedWaitSeconds?: number;
   b64_json?: string;
   url?: string;
   revised_prompt?: string;
   error?: string;
-  startTime?: number;
-  elapsedSecs?: number;
-  elapsedUpdatedAt?: number;
-  durationMs?: number;
 };
 
 export type ImageTurnStatus = "queued" | "generating" | "success" | "error";
@@ -38,15 +37,16 @@ export type ImageTurn = {
   referenceImages: StoredReferenceImage[];
   count: number;
   size: string;
-  ratio: string;
-  tier: string;
-  quality: string;
+  quality: ImageQuality;
+  generationMode: ImageGenerationMode;
   images: StoredImage[];
   createdAt: string;
   status: ImageTurnStatus;
+  queuePosition?: number;
+  queueAhead?: number;
+  queueTotal?: number;
+  estimatedWaitSeconds?: number;
   error?: string;
-  promptDeleted?: boolean;
-  resultsDeleted?: boolean;
 };
 
 export type ImageConversation = {
@@ -67,20 +67,55 @@ const imageConversationStorage = localforage.createInstance({
   storeName: "image_conversations",
 });
 
-const IMAGE_CONVERSATIONS_KEY = "items";
+const IMAGE_CONVERSATIONS_KEY_PREFIX = "items:";
 let imageConversationWriteQueue: Promise<void> = Promise.resolve();
+
+function normalizeScopeId(scopeId: string) {
+  return String(scopeId || "").trim() || "default";
+}
+
+function getImageConversationsKey(scopeId: string) {
+  return `${IMAGE_CONVERSATIONS_KEY_PREFIX}${normalizeScopeId(scopeId)}`;
+}
+
+function normalizeStoredImageUrl(value: unknown): string | undefined {
+  const url = typeof value === "string" ? value.trim() : "";
+  if (!url) {
+    return undefined;
+  }
+  if (typeof window === "undefined") {
+    return url;
+  }
+
+  try {
+    const currentUrl = new URL(window.location.href);
+    const imageUrl = new URL(url, currentUrl.origin);
+    if (
+      imageUrl.hostname === "image.shour.fun" &&
+      imageUrl.pathname.startsWith("/images/") &&
+      currentUrl.hostname !== imageUrl.hostname
+    ) {
+      return `${currentUrl.origin}${imageUrl.pathname}${imageUrl.search}${imageUrl.hash}`;
+    }
+  } catch {
+    return url;
+  }
+  return url;
+}
 
 function normalizeStoredImage(image: StoredImage): StoredImage {
   const normalized = {
     ...image,
     taskId: typeof image.taskId === "string" && image.taskId ? image.taskId : undefined,
     taskStatus: image.taskStatus === "queued" || image.taskStatus === "running" ? image.taskStatus : undefined,
-    url: typeof image.url === "string" && image.url ? image.url : undefined,
+    queuePosition: Number.isFinite(Number(image.queuePosition)) ? Number(image.queuePosition) : undefined,
+    queueAhead: Number.isFinite(Number(image.queueAhead)) ? Number(image.queueAhead) : undefined,
+    queueTotal: Number.isFinite(Number(image.queueTotal)) ? Number(image.queueTotal) : undefined,
+    estimatedWaitSeconds: Number.isFinite(Number(image.estimatedWaitSeconds))
+      ? Number(image.estimatedWaitSeconds)
+      : undefined,
+    url: normalizeStoredImageUrl(image.url),
     revised_prompt: typeof image.revised_prompt === "string" ? image.revised_prompt : undefined,
-    startTime: typeof image.startTime === "number" ? image.startTime : undefined,
-    elapsedSecs: typeof image.elapsedSecs === "number" ? image.elapsedSecs : undefined,
-    elapsedUpdatedAt: typeof image.elapsedUpdatedAt === "number" ? image.elapsedUpdatedAt : undefined,
-    durationMs: typeof image.durationMs === "number" ? image.durationMs : undefined,
   };
   if (image.status === "loading" || image.status === "error" || image.status === "success") {
     return normalized;
@@ -97,6 +132,10 @@ function normalizeReferenceImage(image: StoredReferenceImage): StoredReferenceIm
     type: image.type || "image/png",
     dataUrl: image.dataUrl,
   };
+}
+
+function normalizeGenerationMode(value: unknown): ImageGenerationMode {
+  return value === "paid" ? "paid" : "free";
 }
 
 function dataUrlMimeType(dataUrl: string) {
@@ -135,9 +174,26 @@ function getLegacyReferenceImages(source: Record<string, unknown>): StoredRefere
 
 function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
   const normalizedImages = Array.isArray(turn.images) ? turn.images.map(normalizeStoredImage) : [];
+  const loadingImages = normalizedImages.filter((image) => image.status === "loading");
+  const queuedImages = loadingImages.filter((image) => image.taskStatus === "queued");
+  const runningImages = loadingImages.filter((image) => image.taskStatus === "running");
+  const queuePositionValues = queuedImages
+    .map((image) => image.queuePosition)
+    .filter((value): value is number => typeof value === "number" && value >= 1);
+  const queueAheadValues = queuedImages
+    .map((image) => image.queueAhead)
+    .filter((value): value is number => typeof value === "number" && value >= 0);
+  const queueTotalValues = queuedImages
+    .map((image) => image.queueTotal)
+    .filter((value): value is number => typeof value === "number" && value >= 1);
+  const waitValues = queuedImages
+    .map((image) => image.estimatedWaitSeconds)
+    .filter((value): value is number => typeof value === "number" && value >= 0);
   const derivedStatus: ImageTurnStatus =
-    normalizedImages.some((image) => image.status === "loading")
-      ? "generating"
+    loadingImages.length > 0
+      ? queuedImages.length === loadingImages.length && runningImages.length === 0
+        ? "queued"
+        : "generating"
       : normalizedImages.some((image) => image.status === "error")
         ? "error"
         : "success";
@@ -150,9 +206,8 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     referenceImages: getLegacyReferenceImages(turn),
     count: Math.max(1, Number(turn.count || normalizedImages.length || 1)),
     size: typeof turn.size === "string" ? turn.size : "",
-    ratio: typeof turn.ratio === "string" && turn.ratio ? turn.ratio : "1:1",
-    tier: typeof turn.tier === "string" && turn.tier ? turn.tier : "1k",
-    quality: typeof turn.quality === "string" && turn.quality ? turn.quality : "auto",
+    quality: turn.quality === "xhigh" ? "xhigh" : turn.quality === "high" ? "high" : "standard",
+    generationMode: normalizeGenerationMode(turn.generationMode ?? turn.generation_mode),
     images: normalizedImages,
     createdAt: String(turn.createdAt || new Date().toISOString()),
     status:
@@ -162,9 +217,15 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
       turn.status === "error"
         ? turn.status
         : derivedStatus,
+    queuePosition:
+      queuePositionValues.length > 0 ? Math.min(...queuePositionValues) : undefined,
+    queueAhead:
+      queueAheadValues.length > 0 ? Math.min(...queueAheadValues) : undefined,
+    queueTotal:
+      queueTotalValues.length > 0 ? Math.max(...queueTotalValues) : undefined,
+    estimatedWaitSeconds:
+      waitValues.length > 0 ? Math.min(...waitValues) : undefined,
     error: typeof turn.error === "string" ? turn.error : undefined,
-    promptDeleted: turn.promptDeleted === true,
-    resultsDeleted: turn.resultsDeleted === true,
   };
 }
 
@@ -180,9 +241,8 @@ function normalizeConversation(conversation: ImageConversation & Record<string, 
           referenceImages: getLegacyReferenceImages(conversation),
           count: Number(conversation.count || 1),
           size: typeof conversation.size === "string" ? conversation.size : "",
-          ratio: typeof conversation.ratio === "string" && conversation.ratio ? conversation.ratio : "1:1",
-          tier: typeof conversation.tier === "string" && conversation.tier ? conversation.tier : "1k",
-          quality: typeof conversation.quality === "string" && conversation.quality ? conversation.quality : "auto",
+          quality: conversation.quality === "xhigh" ? "xhigh" : conversation.quality === "high" ? "high" : "standard",
+          generationMode: normalizeGenerationMode(conversation.generationMode ?? conversation.generation_mode),
           images: Array.isArray(conversation.images) ? (conversation.images as StoredImage[]) : [],
           createdAt: String(conversation.createdAt || new Date().toISOString()),
           status:
@@ -225,36 +285,36 @@ function queueImageConversationWrite<T>(operation: () => Promise<T>): Promise<T>
   return result;
 }
 
-async function readStoredImageConversations(): Promise<ImageConversation[]> {
+async function readStoredImageConversations(scopeId: string): Promise<ImageConversation[]> {
   const items =
     (await imageConversationStorage.getItem<Array<ImageConversation & Record<string, unknown>>>(
-      IMAGE_CONVERSATIONS_KEY,
+      getImageConversationsKey(scopeId),
     )) || [];
   return items.map(normalizeConversation);
 }
 
-export async function listImageConversations(): Promise<ImageConversation[]> {
-  return sortImageConversations(await readStoredImageConversations());
+export async function listImageConversations(scopeId: string): Promise<ImageConversation[]> {
+  return sortImageConversations(await readStoredImageConversations(scopeId));
 }
 
-export async function saveImageConversations(conversations: ImageConversation[]): Promise<void> {
+export async function saveImageConversations(scopeId: string, conversations: ImageConversation[]): Promise<void> {
   await queueImageConversationWrite(async () => {
-    const items = await readStoredImageConversations();
+    const items = await readStoredImageConversations(scopeId);
     const conversationMap = new Map(items.map((item) => [item.id, item]));
     for (const conversation of conversations.map(normalizeConversation)) {
       const current = conversationMap.get(conversation.id);
       conversationMap.set(conversation.id, current ? pickLatestConversation(current, conversation) : conversation);
     }
     await imageConversationStorage.setItem(
-      IMAGE_CONVERSATIONS_KEY,
+      getImageConversationsKey(scopeId),
       sortImageConversations([...conversationMap.values()]),
     );
   });
 }
 
-export async function saveImageConversation(conversation: ImageConversation): Promise<void> {
+export async function saveImageConversation(scopeId: string, conversation: ImageConversation): Promise<void> {
   await queueImageConversationWrite(async () => {
-    const items = await readStoredImageConversations();
+    const items = await readStoredImageConversations(scopeId);
     const nextConversation = normalizeConversation(conversation);
     const current = items.find((item) => item.id === nextConversation.id);
     const persistedConversation = current ? pickLatestConversation(current, nextConversation) : nextConversation;
@@ -262,37 +322,23 @@ export async function saveImageConversation(conversation: ImageConversation): Pr
       persistedConversation,
       ...items.filter((item) => item.id !== persistedConversation.id),
     ]);
-    await imageConversationStorage.setItem(IMAGE_CONVERSATIONS_KEY, nextItems);
+    await imageConversationStorage.setItem(getImageConversationsKey(scopeId), nextItems);
   });
 }
 
-export async function renameImageConversation(id: string, title: string): Promise<void> {
+export async function deleteImageConversation(scopeId: string, id: string): Promise<void> {
   await queueImageConversationWrite(async () => {
-    const items = await readStoredImageConversations();
-    const target = items.find((item) => item.id === id);
-    if (!target) return;
-    const updated = { ...target, title, updatedAt: new Date().toISOString() };
-    const nextItems = sortImageConversations([
-      updated,
-      ...items.filter((item) => item.id !== id),
-    ]);
-    await imageConversationStorage.setItem(IMAGE_CONVERSATIONS_KEY, nextItems);
-  });
-}
-
-export async function deleteImageConversation(id: string): Promise<void> {
-  await queueImageConversationWrite(async () => {
-    const items = await readStoredImageConversations();
+    const items = await readStoredImageConversations(scopeId);
     await imageConversationStorage.setItem(
-      IMAGE_CONVERSATIONS_KEY,
+      getImageConversationsKey(scopeId),
       items.filter((item) => item.id !== id),
     );
   });
 }
 
-export async function clearImageConversations(): Promise<void> {
+export async function clearImageConversations(scopeId: string): Promise<void> {
   await queueImageConversationWrite(async () => {
-    await imageConversationStorage.removeItem(IMAGE_CONVERSATIONS_KEY);
+    await imageConversationStorage.removeItem(getImageConversationsKey(scopeId));
   });
 }
 
@@ -303,9 +349,6 @@ export function getImageConversationStats(conversation: ImageConversation | null
 
   return conversation.turns.reduce(
     (acc, turn) => {
-      if (turn.resultsDeleted) {
-        return acc;
-      }
       if (turn.status === "queued") {
         acc.queued += 1;
       } else if (turn.status === "generating") {

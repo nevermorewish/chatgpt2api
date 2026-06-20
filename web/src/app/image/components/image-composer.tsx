@@ -1,109 +1,61 @@
 "use client";
-import { ArrowUp, ChevronDown, ImagePlus, Info, LoaderCircle, RectangleHorizontal, RectangleVertical, Square, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type RefObject } from "react";
+import { ArrowUp, BookOpen, Check, ChevronDown, ImagePlus, LoaderCircle, Ruler, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type RefObject } from "react";
 
 import { ImageLightbox } from "@/components/image-lightbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { ImageModel } from "@/lib/api";
+import type { ImageGenerationMode, ImageQuality } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type ImageComposerProps = {
   prompt: string;
   imageCount: string;
-  imageRatio: string;
-  imageTier: string;
-  imageWidth: string;
-  imageHeight: string;
-  imageQuality: string;
-  imageModel: ImageModel;
-  imageModels: ImageModel[];
+  imageSize: string;
+  imageQuality: ImageQuality;
+  generationMode: ImageGenerationMode;
+  showGenerationModeSwitch?: boolean;
   availableQuota: string;
+  quotaLabel?: string;
+  quotaHint?: string;
   activeTaskCount: number;
   referenceImages: Array<{ name: string; dataUrl: string }>;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
   onPromptChange: (value: string) => void;
   onImageCountChange: (value: string) => void;
-  onImageRatioChange: (value: string) => void;
-  onImageTierChange: (value: string) => void;
-  onImageWidthChange: (value: string) => void;
-  onImageHeightChange: (value: string) => void;
-  onImageQualityChange: (value: string) => void;
-  onImageModelChange: (value: ImageModel) => void;
+  onImageSizeChange: (value: string) => void;
+  onImageQualityChange: (value: ImageQuality) => void;
+  onGenerationModeChange: (value: ImageGenerationMode) => void;
   onSubmit: () => void | Promise<void>;
+  onOpenPromptLibrary: () => void;
   onPickReferenceImage: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
   onRemoveReferenceImage: (index: number) => void;
 };
 
-const imageFileNamePattern = /\.(avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)$/i;
-
-function isImageFile(file: File) {
-  return file.type.startsWith("image/") || (!file.type && imageFileNamePattern.test(file.name));
-}
-
-function hasDraggedImages(dataTransfer: DataTransfer) {
-  const items = Array.from(dataTransfer.items || []);
-  if (items.length > 0) {
-    return items.some((item) => item.kind === "file" && (item.type.startsWith("image/") || !item.type));
-  }
-  return Array.from(dataTransfer.files || []).some(isImageFile);
-}
-
-function getDraggedImageFiles(dataTransfer: DataTransfer) {
-  return Array.from(dataTransfer.files || []).filter(isImageFile);
-}
-
-const qualityOptions = [
-  { value: "auto", label: "自动" },
-  { value: "low", label: "低" },
-  { value: "medium", label: "中" },
-  { value: "high", label: "高" },
-];
-const aspectOptions = [
-  { ratio: "1:1", tier: "1k", width: "1024", height: "1024", label: "1:1", icon: Square },
-  { ratio: "2:3", tier: "1k", width: "1024", height: "1536", label: "2:3", icon: RectangleVertical },
-  { ratio: "3:2", tier: "1k", width: "1536", height: "1024", label: "3:2", icon: RectangleHorizontal },
-  { ratio: "3:4", tier: "1k", width: "1024", height: "1365", label: "3:4", icon: RectangleVertical },
-  { ratio: "4:3", tier: "1k", width: "1365", height: "1024", label: "4:3", icon: RectangleHorizontal },
-  { ratio: "9:16", tier: "1k", width: "1088", height: "1920", label: "9:16", icon: RectangleVertical },
-  { ratio: "16:9", tier: "1k", width: "1920", height: "1088", label: "16:9", icon: RectangleHorizontal },
-  { ratio: "1:1", tier: "2k", width: "2048", height: "2048", label: "1:1(2k)", icon: Square },
-  { ratio: "16:9", tier: "2k", width: "2560", height: "1440", label: "16:9(2k)", icon: RectangleHorizontal },
-  { ratio: "9:16", tier: "2k", width: "1440", height: "2560", label: "9:16(2k)", icon: RectangleVertical },
-  { ratio: "16:9", tier: "4k", width: "3840", height: "2160", label: "16:9(4k)", icon: RectangleHorizontal },
-  { ratio: "9:16", tier: "4k", width: "2160", height: "3840", label: "9:16(4k)", icon: RectangleVertical },
-  { ratio: "auto", tier: "auto", width: "1024", height: "1024", label: "auto", icon: null },
-];
-const countOptions = Array.from({ length: 10 }, (_, index) => String(index + 1));
-
 export function ImageComposer({
   prompt,
   imageCount,
-  imageRatio,
-  imageTier,
-  imageWidth,
-  imageHeight,
+  imageSize,
   imageQuality,
-  imageModel,
-  imageModels,
+  generationMode,
+  showGenerationModeSwitch = false,
   availableQuota,
+  quotaLabel = "剩余额度",
+  quotaHint = "",
   activeTaskCount,
   referenceImages,
   textareaRef,
   fileInputRef,
   onPromptChange,
   onImageCountChange,
-  onImageRatioChange,
-  onImageTierChange,
-  onImageWidthChange,
-  onImageHeightChange,
+  onImageSizeChange,
   onImageQualityChange,
-  onImageModelChange,
+  onGenerationModeChange,
   onSubmit,
+  onOpenPromptLibrary,
   onPickReferenceImage,
   onReferenceImageChange,
   onRemoveReferenceImage,
@@ -111,45 +63,65 @@ export function ImageComposer({
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [isSizeMenuOpen, setIsSizeMenuOpen] = useState(false);
-  const [isDraggingImage, setIsDraggingImage] = useState(false);
-  const [sizeMenuPos, setSizeMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
   const sizeMenuRef = useRef<HTMLDivElement>(null);
-  const sizeMenuBtnRef = useRef<HTMLButtonElement>(null);
+  const qualityMenuRef = useRef<HTMLDivElement>(null);
   const lightboxImages = useMemo(
     () => referenceImages.map((image, index) => ({ id: `${image.name}-${index}`, src: image.dataUrl })),
     [referenceImages],
   );
-  const modelOptions = useMemo(
-    () => imageModels.map((model) => ({ value: model, label: model })),
-    [imageModels],
-  );
-  const qualityLabel = qualityOptions.find((option) => option.value === imageQuality)?.label || "自动";
-  const ratioLabel = imageRatio === "auto" ? "auto" : `${imageRatio}(${imageTier})`;
-  const imageSizeLabel = `${qualityLabel} · ${ratioLabel} · ${imageCount || 1} 张`;
-  const selectedModelLabel = modelOptions.find((option) => option.value === imageModel)?.label || imageModel;
-  const isCodexModel = imageModel.toLowerCase().includes("codex");
+  const allImageSizeOptions = [
+    { value: "", label: "未指定" },
+    { value: "1024x1024", label: "1024x1024 方图" },
+    { value: "1536x1024", label: "1536x1024 横图" },
+    { value: "1024x1536", label: "1024x1536 竖图" },
+    { value: "2048x2048", label: "2K 2048x2048 方图" },
+    { value: "2048x1152", label: "2K 2048x1152 横图" },
+    { value: "1152x2048", label: "2K 1152x2048 竖图" },
+    { value: "2560x1440", label: "2K 2560x1440 横图" },
+    { value: "1440x2560", label: "2K 1440x2560 竖图" },
+    { value: "2480x2480", label: "4K 1:1 2480x2480 方图" },
+    { value: "3312x1872", label: "4K 16:9 3312x1872 横图 推荐" },
+    { value: "1872x3312", label: "4K 9:16 1872x3312 竖图 推荐" },
+    { value: "3056x2032", label: "4K 3:2 3056x2032 横图" },
+    { value: "2032x3056", label: "4K 2:3 2032x3056 竖图" },
+    { value: "2880x2160", label: "4K 4:3 2880x2160 横图" },
+    { value: "2160x2880", label: "4K 3:4 2160x2880 竖图" },
+    { value: "2784x2224", label: "4K 5:4 2784x2224 横图" },
+    { value: "2224x2784", label: "4K 4:5 2224x2784 竖图" },
+    { value: "3808x1632", label: "4K 21:9 3808x1632 宽屏" },
+    { value: "3840x2160", label: "极限 4K 3840x2160 横图 不推荐" },
+    { value: "2160x3840", label: "极限 4K 2160x3840 竖图 不推荐" },
+  ];
+  const imageSizeOptions = generationMode === "free" ? allImageSizeOptions.slice(0, 4) : allImageSizeOptions;
+  const imageSizeLabel = imageSizeOptions.find((option) => option.value === imageSize)?.label || "未指定";
+  const imageSizeDisplayLabel = formatImageSizeDisplayLabel(imageSizeLabel);
+  const imageQualityOptions: Array<{ value: ImageQuality; label: string }> = generationMode === "free" ? [
+    { value: "standard", label: "标准" },
+  ] : [
+    { value: "standard", label: "标准" },
+    { value: "high", label: "高清 high" },
+  ];
+  const imageQualityLabel = imageQualityOptions.find((option) => option.value === imageQuality)?.label || "高清 high";
 
   useEffect(() => {
-    if (!isSizeMenuOpen) {
+    if (!isSizeMenuOpen && !isQualityMenuOpen) {
       return;
     }
     const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target;
-      if (
-        target instanceof Element &&
-        target.closest('[data-slot="select-content"], [data-slot="select-trigger"]')
-      ) {
-        return;
-      }
-      if (!sizeMenuRef.current?.contains(target as Node)) {
+      const target = event.target as Node;
+      if (!sizeMenuRef.current?.contains(target)) {
         setIsSizeMenuOpen(false);
+      }
+      if (!qualityMenuRef.current?.contains(target)) {
+        setIsQualityMenuOpen(false);
       }
     };
     window.addEventListener("mousedown", handlePointerDown);
     return () => {
       window.removeEventListener("mousedown", handlePointerDown);
     };
-  }, [isSizeMenuOpen]);
+  }, [isQualityMenuOpen, isSizeMenuOpen]);
 
   const handleTextareaPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
@@ -161,53 +133,9 @@ export function ImageComposer({
     void onReferenceImageChange(imageFiles);
   };
 
-  const handleComposerDragEnter = (event: DragEvent<HTMLDivElement>) => {
-    if (!hasDraggedImages(event.dataTransfer)) {
-      return;
-    }
-
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
-    setIsSizeMenuOpen(false);
-    setIsDraggingImage(true);
-  };
-
-  const handleComposerDragOver = (event: DragEvent<HTMLDivElement>) => {
-    if (!hasDraggedImages(event.dataTransfer)) {
-      return;
-    }
-
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
-    setIsDraggingImage(true);
-  };
-
-  const handleComposerDragLeave = (event: DragEvent<HTMLDivElement>) => {
-    const nextTarget = event.relatedTarget;
-    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
-      return;
-    }
-    setIsDraggingImage(false);
-  };
-
-  const handleComposerDrop = (event: DragEvent<HTMLDivElement>) => {
-    const imageFiles = getDraggedImageFiles(event.dataTransfer);
-    if (event.dataTransfer.files.length > 0 || imageFiles.length > 0) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-
-    setIsDraggingImage(false);
-    if (imageFiles.length === 0) {
-      return;
-    }
-
-    void onReferenceImageChange(imageFiles);
-  };
-
   return (
     <div className="shrink-0 flex justify-center px-1 sm:px-0">
-      <div style={{ width: "min(980px, 100%)" }}>
+      <div className="w-full max-w-[1040px]">
         <input
           ref={fileInputRef}
           type="file"
@@ -254,18 +182,9 @@ export function ImageComposer({
           </div>
         ) : null}
 
-        <div
-          className={cn(
-            "overflow-hidden rounded-[24px] border border-stone-200 bg-white shadow-[0_14px_60px_-42px_rgba(15,23,42,0.45)] transition dark:border-white/10 dark:bg-stone-950/80 sm:rounded-[32px] sm:shadow-none",
-            isDraggingImage && "border-stone-900 bg-stone-50",
-          )}
-        >
+        <div className="overflow-visible rounded-[24px] border border-white/85 bg-white/90 shadow-[0_20px_80px_-48px_rgba(15,23,42,0.55)] ring-1 ring-stone-900/[0.03] backdrop-blur sm:rounded-[28px]">
           <div
             className="relative cursor-text"
-            onDragEnter={handleComposerDragEnter}
-            onDragOver={handleComposerDragOver}
-            onDragLeave={handleComposerDragLeave}
-            onDrop={handleComposerDrop}
             onClick={() => {
               textareaRef.current?.focus();
             }}
@@ -293,230 +212,162 @@ export function ImageComposer({
                   void onSubmit();
                 }
               }}
-              className="min-h-[82px] resize-none rounded-[24px] border-0 bg-transparent px-4 pt-4 pb-2 text-[15px] leading-6 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 dark:text-stone-100 dark:placeholder:text-stone-500 sm:min-h-[148px] sm:rounded-[32px] sm:px-6 sm:pt-6 sm:pb-20 sm:leading-7"
+              className="min-h-[82px] resize-none rounded-[24px] border-0 bg-transparent px-4 pt-4 pb-2 text-[15px] leading-6 text-stone-900 shadow-none placeholder:text-stone-400 focus-visible:ring-0 sm:min-h-[140px] sm:rounded-[28px] sm:px-6 sm:pt-6 sm:pb-5 sm:leading-7"
             />
-            {isDraggingImage ? (
-              <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[24px] border-2 border-dashed border-stone-900 bg-white/85 text-sm font-medium text-stone-900 backdrop-blur-[1px] sm:rounded-[32px]">
-                <div className="flex items-center gap-2 rounded-full bg-stone-950 px-4 py-2 text-white shadow-lg">
-                  <ImagePlus className="size-4" />
-                  <span>松开以上传参考图</span>
-                </div>
-              </div>
-            ) : null}
 
-            <div className="rounded-b-[24px] border-t border-stone-100 bg-white px-3 pb-3 pt-2 dark:border-white/10 dark:bg-stone-950/95 sm:absolute sm:inset-x-0 sm:bottom-0 sm:rounded-b-none sm:border-t-0 sm:bg-gradient-to-t sm:from-white sm:via-white/95 sm:to-transparent sm:px-6 sm:pb-4 sm:pt-6 sm:dark:from-stone-950 sm:dark:via-stone-950/95 sm:dark:to-stone-950/0" onClick={(event) => event.stopPropagation()}>
+            <div className="border-t border-stone-100/90 bg-stone-50/75 px-3 pb-3 pt-2 sm:px-5 sm:pb-4 sm:pt-4">
               <div className="flex items-end justify-between gap-2 sm:gap-3">
-                <div className="hide-scrollbar flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto pb-0.5 sm:flex-wrap sm:gap-3 sm:overflow-visible sm:pb-0">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 pb-0.5 sm:gap-3 sm:pb-0">
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-9 shrink-0 rounded-full border-stone-200 bg-white px-3 text-xs font-medium text-stone-700 shadow-none sm:h-10 sm:px-4 sm:text-sm"
+                    className="h-9 shrink-0 rounded-full border-stone-200 bg-white px-3 text-xs font-medium text-stone-700 shadow-sm shadow-stone-900/[0.03] transition hover:border-stone-300 hover:bg-white sm:h-10 sm:px-4 sm:text-sm"
                     onClick={onPickReferenceImage}
-                    aria-label={referenceImages.length > 0 ? "添加参考图" : "上传"}
                   >
                     <ImagePlus className="size-3.5 sm:size-4" />
-                    <span className="hidden sm:inline">{referenceImages.length > 0 ? "添加参考图" : "上传"}</span>
+                    <span>{referenceImages.length > 0 ? "添加参考图" : "上传"}</span>
                   </Button>
-                  <div className="shrink-0 rounded-full bg-stone-100 px-2 py-1 text-[10px] font-medium text-stone-600 sm:px-3 sm:py-2 sm:text-xs">
-                    <span className="hidden sm:inline">剩余额度 </span>{availableQuota}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-9 shrink-0 rounded-full border-stone-200 bg-white px-3 text-xs font-medium text-stone-700 shadow-sm shadow-stone-900/[0.03] transition hover:border-stone-300 hover:bg-white sm:h-10 sm:px-4 sm:text-sm"
+                    onClick={onOpenPromptLibrary}
+                  >
+                    <BookOpen className="size-3.5 sm:size-4" />
+                    <span>模板库</span>
+                  </Button>
+                  <div
+                    className="order-first inline-flex min-w-0 max-w-full basis-full items-center justify-center rounded-full border border-stone-200/80 bg-white/80 px-2 py-1 text-[10px] font-medium text-stone-600 sm:order-none sm:max-w-[560px] sm:basis-auto sm:justify-start sm:px-3 sm:py-2 sm:text-xs"
+                    title={quotaHint ? `${quotaLabel} ${availableQuota} · ${quotaHint}` : `${quotaLabel} ${availableQuota}`}
+                  >
+                    <span className="hidden xs:inline shrink-0">{quotaLabel} </span>
+                    <span className="shrink-0">{availableQuota}</span>
+                    {quotaHint ? <span className="ml-1 min-w-0 truncate text-stone-400">· {quotaHint}</span> : null}
                   </div>
+                  {showGenerationModeSwitch ? (
+                    <div className="flex h-9 shrink-0 items-center rounded-full border border-stone-200 bg-white p-0.5 text-[11px] font-medium sm:h-10 sm:text-xs">
+                      {([
+                        ["free", "免费"],
+                        ["paid", "充值高清"],
+                      ] as Array<[ImageGenerationMode, string]>).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={cn(
+                            "h-8 rounded-full px-3 transition sm:px-4",
+                            generationMode === value
+                              ? "bg-stone-950 text-white"
+                              : "text-stone-600 hover:bg-stone-100",
+                          )}
+                          onClick={() => onGenerationModeChange(value)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                   {activeTaskCount > 0 && (
                     <div className="flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-[10px] font-medium text-amber-700 sm:gap-1.5 sm:px-3 sm:py-2 sm:text-xs">
                       <LoaderCircle className="size-3 animate-spin" />
                       {activeTaskCount}<span className="hidden sm:inline"> 个任务处理中</span>
                     </div>
                   )}
-                  <div className="relative flex h-9 min-w-0 shrink items-center rounded-full bg-transparent text-[11px] sm:h-auto sm:shrink-0 sm:text-[13px]">
+                  <div className="flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 bg-white px-2 py-0.5 sm:h-auto sm:gap-2 sm:px-3 sm:py-1">
+                    <span className="text-[11px] font-medium text-stone-700 sm:text-sm">张数</span>
+                    <Input
+                      type="number"
+                      inputMode="numeric"
+                      min="1"
+                      max="10"
+                      step="1"
+                      value={imageCount}
+                      onChange={(event) => onImageCountChange(event.target.value)}
+                      className="h-7 w-[40px] border-0 bg-transparent px-0 text-center text-xs font-medium text-stone-700 shadow-none focus-visible:ring-0 sm:h-8 sm:w-[64px] sm:text-sm"
+                    />
+                  </div>
+                  <div
+                    ref={sizeMenuRef}
+                    className="relative flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 bg-white px-2 py-0.5 text-[11px] shadow-sm shadow-stone-900/[0.03] sm:h-auto sm:gap-2 sm:px-3 sm:py-1 sm:text-[13px]"
+                  >
+                    <Ruler className="size-3.5 shrink-0 text-stone-500 sm:size-4" />
+                    <span className="font-medium text-stone-700 sm:text-sm">尺寸</span>
                     <button
-                      ref={sizeMenuBtnRef}
                       type="button"
-                      className="inline-flex h-9 w-fit max-w-[calc(100vw-12rem)] items-center justify-between gap-2 rounded-full bg-stone-100 px-4 text-left text-xs font-semibold text-stone-900 sm:h-10 sm:max-w-none sm:text-sm"
+                      className="flex h-7 w-[152px] items-center justify-between bg-transparent text-left text-xs font-bold text-stone-700 min-[390px]:w-[172px] sm:h-8 sm:w-[236px]"
                       onClick={() => {
-                        if (!isSizeMenuOpen && sizeMenuBtnRef.current) {
-                          const rect = sizeMenuBtnRef.current.getBoundingClientRect();
-                          const menuWidth = Math.min(460, window.innerWidth - 32);
-                          setSizeMenuPos({ top: rect.top - 8, left: Math.max(16, Math.min(rect.left, window.innerWidth - menuWidth - 16)) });
-                        }
+                        setIsQualityMenuOpen(false);
                         setIsSizeMenuOpen((open) => !open);
                       }}
                     >
-                      <span className="truncate">{imageSizeLabel}</span>
+                      <span className="truncate">{imageSizeDisplayLabel}</span>
                       <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isSizeMenuOpen && "rotate-180")} />
                     </button>
                     {isSizeMenuOpen ? (
-                      <div
-                        ref={sizeMenuRef}
-                        className="fixed z-[80] max-h-[62dvh] overflow-y-auto rounded-[24px] border border-stone-200/70 bg-white p-4 shadow-[0_30px_90px_-34px_rgba(15,23,42,0.42)] sm:max-h-none sm:overflow-visible"
-                        style={{
-                          top: sizeMenuPos.top,
-                          left: sizeMenuPos.left,
-                          transform: "translateY(-100%)",
-                          width: "min(460px, calc(100vw - 2rem))",
-                        }}
-                      >
-                        <h3 className="mb-3 text-base font-semibold text-stone-950">图像设置</h3>
-                        <div className="mb-3">
-                          <div className="mb-2 text-sm font-medium text-stone-900">模型</div>
-                          <Select
-                            value={imageModel}
-                            onValueChange={(value) => {
-                              onImageModelChange(value as ImageModel);
-                            }}
-                          >
-                            <SelectTrigger className="h-10 rounded-xl border-stone-200 bg-white text-sm shadow-none">
-                              <div className="flex min-w-0 items-center gap-2">
-                                <img
-                                  src="/openai.svg"
-                                  alt=""
-                                  aria-hidden="true"
-                                  className="size-4 shrink-0 text-stone-700"
-                                />
-                                <span className="truncate">{selectedModelLabel}</span>
-                              </div>
-                            </SelectTrigger>
-                            <SelectContent className="z-[120]">
-                              {modelOptions.map((option) => (
-                                <SelectItem
-                                  key={option.value}
-                                  value={option.value}
-                                  className="pl-10"
-                                  style={{
-                                    backgroundImage: "url('/openai.svg')",
-                                    backgroundRepeat: "no-repeat",
-                                    backgroundPosition: "12px center",
-                                    backgroundSize: "16px 16px",
-                                  }}
-                                >
-                                  {option.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="mb-3">
-                          <div className="mb-2 text-sm font-medium text-stone-900">质量</div>
-                          <div className="grid grid-cols-4 gap-2">
-                            {qualityOptions.map((option) => {
-                              const active = option.value === imageQuality;
-                              return (
-                                <button
-                                  key={option.value}
-                                  type="button"
-                                  className={cn(
-                                    "h-9 cursor-pointer rounded-full border border-stone-200 bg-white text-sm text-stone-800 transition hover:border-stone-300 hover:bg-stone-50",
-                                    active && "border-stone-950 bg-white font-medium text-stone-950",
-                                  )}
-                                  onClick={() => onImageQualityChange(option.value)}
-                                >
-                                  {option.label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                        <div className="mb-3">
-                          <div className="mb-2 flex items-center gap-1.5 text-sm font-medium text-stone-900">
-                            尺寸 <Info className="size-3.5 text-stone-400" />
-                          </div>
-                          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-                            <div className="flex items-center rounded-lg bg-stone-100 px-3 py-1.5 text-sm text-stone-700">
-                              <span className="mr-2 text-stone-500">W</span>
-                              <Input
-                                type="number"
-                                inputMode="numeric"
-                                min="1"
-                                value={imageWidth}
-                                onChange={(event) => onImageWidthChange(event.target.value)}
-                                className="h-7 border-0 bg-transparent px-0 text-sm font-medium text-stone-800 shadow-none focus-visible:ring-0"
-                              />
-                            </div>
-                            <span className="text-stone-400">×</span>
-                            <div className="flex items-center rounded-lg bg-stone-100 px-3 py-1.5 text-sm text-stone-700">
-                              <span className="mr-2 text-stone-500">H</span>
-                              <Input
-                                type="number"
-                                inputMode="numeric"
-                                min="1"
-                                value={imageHeight}
-                                onChange={(event) => onImageHeightChange(event.target.value)}
-                                className="h-7 border-0 bg-transparent px-0 text-sm font-medium text-stone-800 shadow-none focus-visible:ring-0"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                        <div className="mb-3">
-                          <div className="mb-2 flex items-center gap-1.5 text-sm font-medium text-stone-900">
-                            宽高比 <Info className="size-3.5 text-stone-400" />
-                          </div>
-                          <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
-                            {aspectOptions.map((option) => {
-                              const active = option.ratio === imageRatio && option.tier === imageTier && option.width === imageWidth && option.height === imageHeight;
-                              const Icon = option.icon;
-                              const disabled = !isCodexModel && (option.tier === "2k" || option.tier === "4k");
-                              return (
-                                <button
-                                  key={`${option.ratio}-${option.tier}-${option.label}`}
-                                  type="button"
-                                  disabled={disabled}
-                                  className={cn(
-                                    "flex h-[64px] cursor-pointer flex-col items-center justify-center gap-1 rounded-2xl border border-stone-200 bg-white text-sm text-stone-800 transition hover:border-stone-300 hover:bg-stone-50",
-                                    active && "border-stone-950",
-                                    disabled && "cursor-not-allowed border-stone-100 bg-stone-50 text-stone-300 hover:border-stone-100 hover:bg-stone-50",
-                                  )}
-                                  onClick={() => {
-                                    if (disabled) {
-                                      return;
-                                    }
-                                    onImageRatioChange(option.ratio);
-                                    onImageTierChange(option.tier);
-                                    onImageWidthChange(option.width);
-                                    onImageHeightChange(option.height);
-                                  }}
-                                >
-                                  {Icon ? (
-                                    <>
-                                      <Icon className="size-3.5 stroke-[1.8]" />
-                                      <span>{option.label}</span>
-                                    </>
-                                  ) : (
-                                    <span>{option.label}</span>
-                                  )}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                        <div className="border-t border-stone-100 pt-3">
-                          <div className="mb-2 text-sm font-medium text-stone-900">生成数量</div>
-                          <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
-                            {countOptions.map((option) => {
-                              const active = imageCount === option;
-                              return (
-                                <button
-                                  key={option}
-                                  type="button"
-                                  className={cn(
-                                    "h-9 cursor-pointer rounded-full border border-stone-200 bg-white text-sm text-stone-800 transition hover:border-stone-300 hover:bg-stone-50",
-                                    active && "border-stone-950 bg-white font-medium text-stone-950",
-                                  )}
-                                  onClick={() => onImageCountChange(option)}
-                                >
-                                  {option} 张
-                                </button>
-                              );
-                            })}
-                            <Input
-                              type="number"
-                              inputMode="numeric"
-                              min="1"
-                              max="100"
-                              step="1"
-                              value={imageCount}
-                              onChange={(event) => onImageCountChange(event.target.value)}
-                              className="h-9 rounded-full border-stone-200 bg-white px-3 text-center text-sm font-medium text-stone-800 shadow-none focus-visible:ring-0"
-                            />
-                          </div>
-                        </div>
+                      <div className="fixed inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-[80] max-h-[50dvh] overflow-y-auto rounded-3xl border border-white/80 bg-white p-2 shadow-[0_24px_80px_-32px_rgba(15,23,42,0.35)] sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+10px)] sm:right-0 sm:w-[420px]">
+                        {imageSizeOptions.map((option) => {
+                          const active = option.value === imageSize;
+                          return (
+                            <button
+                              key={option.label}
+                              type="button"
+                              className={cn(
+                                "flex w-full items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left text-sm text-stone-700 transition hover:bg-stone-100",
+                                active && "bg-stone-100 font-medium text-stone-950",
+                              )}
+                              onClick={() => {
+                                onImageSizeChange(option.value);
+                                setIsSizeMenuOpen(false);
+                              }}
+                            >
+                              <span className="flex min-w-0 items-center gap-2.5">
+                                <ImageSizeOptionIcon value={option.value} />
+                                <span className="min-w-0 whitespace-normal leading-5">{option.label}</span>
+                              </span>
+                              {active ? <Check className="size-4" /> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div
+                    ref={qualityMenuRef}
+                    className="relative flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-stone-200 bg-white px-2 py-0.5 text-[11px] shadow-sm shadow-stone-900/[0.03] sm:h-auto sm:gap-2 sm:px-3 sm:py-1 sm:text-[13px]"
+                  >
+                    <span className="font-medium text-stone-700 sm:text-sm">画质</span>
+                    <button
+                      type="button"
+                      className="flex h-7 w-[74px] items-center justify-between bg-transparent text-left text-xs font-bold text-stone-700 sm:h-8 sm:w-[104px]"
+                      onClick={() => {
+                        setIsSizeMenuOpen(false);
+                        setIsQualityMenuOpen((open) => !open);
+                      }}
+                    >
+                      <span className="truncate">{imageQualityLabel}</span>
+                      <ChevronDown className={cn("size-4 shrink-0 opacity-60 transition", isQualityMenuOpen && "rotate-180")} />
+                    </button>
+                    {isQualityMenuOpen ? (
+                      <div className="fixed inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+5.75rem)] z-[80] max-h-[45dvh] overflow-y-auto rounded-3xl border border-white/80 bg-white p-2 shadow-[0_24px_80px_-32px_rgba(15,23,42,0.35)] sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+10px)] sm:left-0 sm:w-[156px]">
+                        {imageQualityOptions.map((option) => {
+                          const active = option.value === imageQuality;
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              className={cn(
+                                "flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm text-stone-700 transition hover:bg-stone-100",
+                                active && "bg-stone-100 font-medium text-stone-950",
+                              )}
+                              onClick={() => {
+                                onImageQualityChange(option.value);
+                                setIsQualityMenuOpen(false);
+                              }}
+                            >
+                              <span>{option.label}</span>
+                              {active ? <Check className="size-4" /> : null}
+                            </button>
+                          );
+                        })}
                       </div>
                     ) : null}
                   </div>
@@ -527,7 +378,7 @@ export function ImageComposer({
                   type="button"
                   onClick={() => void onSubmit()}
                   disabled={!prompt.trim()}
-                  className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300 sm:size-11"
+                  className="inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white shadow-[0_14px_30px_-16px_rgba(15,23,42,0.8)] transition hover:-translate-y-0.5 hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300 disabled:shadow-none sm:size-11"
                   aria-label={referenceImages.length > 0 ? "编辑图片" : "生成图片"}
                 >
                   <ArrowUp className="size-3.5 sm:size-4" />
@@ -539,4 +390,66 @@ export function ImageComposer({
       </div>
     </div>
   );
+}
+
+function formatImageSizeDisplayLabel(label: string) {
+  if (!label || label === "未指定") {
+    return label;
+  }
+  return label
+    .replace(" 横图 推荐", " 推荐")
+    .replace(" 竖图 推荐", " 推荐")
+    .replace(" 横图 不推荐", " 不推荐")
+    .replace(" 竖图 不推荐", " 不推荐")
+    .replace(" 横图", "")
+    .replace(" 竖图", "")
+    .replace(" 方图", "")
+    .replace(" 宽屏", "");
+}
+
+function ImageSizeOptionIcon({ value }: { value: string }) {
+  const dimensions = parseImageSize(value);
+  if (!dimensions) {
+    return (
+      <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-500">
+        <Ruler className="size-3.5" />
+      </span>
+    );
+  }
+
+  const { width, height } = dimensions;
+  const ratio = width / height;
+  const maxWidth = 20;
+  const maxHeight = 20;
+  let iconWidth = maxWidth;
+  let iconHeight = Math.round(maxWidth / ratio);
+  if (iconHeight > maxHeight) {
+    iconHeight = maxHeight;
+    iconWidth = Math.round(maxHeight * ratio);
+  }
+  iconWidth = Math.max(7, iconWidth);
+  iconHeight = Math.max(7, iconHeight);
+
+  return (
+    <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-stone-100 text-stone-500">
+      <span
+        className="rounded-[3px] border border-current bg-white/70 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.6)]"
+        style={{ width: iconWidth, height: iconHeight }}
+        aria-hidden="true"
+      />
+    </span>
+  );
+}
+
+function parseImageSize(value: string) {
+  const match = value.match(/^(\d+)x(\d+)$/);
+  if (!match) {
+    return null;
+  }
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return { width, height };
 }
