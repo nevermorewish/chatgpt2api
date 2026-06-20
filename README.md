@@ -224,7 +224,8 @@ nano .env
 
 ```env
 CHATGPT2API_AUTH_KEY=换成你自己的后台密钥
-STORAGE_BACKEND=json
+STORAGE_BACKEND=postgres
+DATABASE_URL=postgresql://chatgpt2api:chatgpt2api@postgres:5432/chatgpt2api
 ```
 
 如果你已经绑定域名，再加上：
