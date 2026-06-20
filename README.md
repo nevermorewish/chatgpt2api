@@ -102,7 +102,7 @@
 
 保留 OpenAI 兼容图片接口，便于接入第三方客户端或其他系统。
 
-下面示例使用本地开发端口 `8025`；如果按 Docker 教程部署，请改成 `3000` 或你的域名。
+下面示例使用本地开发端口 `8025`；如果按 Docker 教程部署，请改成 `3001` 或你的域名。
 
 ### 用户注册
 
@@ -187,7 +187,7 @@ curl http://127.0.0.1:8025/v1/responses \
 - 推荐配置：2 核 2G 起步
 - 需要开放端口：
   - `80` / `443`：绑定域名后访问
-  - `3000`：不配域名时临时访问
+  - `3001`：不配域名时临时访问
 
 ### 2. 安装 Docker
 
@@ -225,7 +225,7 @@ nano .env
 ```env
 CHATGPT2API_AUTH_KEY=换成你自己的后台密钥
 STORAGE_BACKEND=postgres
-DATABASE_URL=postgresql://chatgpt2api:chatgpt2api@postgres:5432/chatgpt2api
+DATABASE_URL=postgresql://image2_2api:image2_2api@image2-2api-postgres:5432/image2_2api
 ```
 
 如果你已经绑定域名，再加上：
@@ -244,7 +244,7 @@ docker compose ps
 启动后先用浏览器打开：
 
 ```text
-http://服务器IP:3000
+http://服务器IP:3001
 ```
 
 ### 6. 第一次进入后台
@@ -252,7 +252,7 @@ http://服务器IP:3000
 后台入口：
 
 ```text
-http://服务器IP:3000/settings
+http://服务器IP:3001/settings
 ```
 
 首次初始化时需要填写的后台密钥就是 `.env` 里的 `CHATGPT2API_AUTH_KEY`；初始化完成后，管理员使用邮箱密码登录。
@@ -285,7 +285,7 @@ server {
     server_name image.example.com;
 
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
