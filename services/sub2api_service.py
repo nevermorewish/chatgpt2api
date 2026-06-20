@@ -245,6 +245,17 @@ def _extract_access_token(credentials: object) -> str:
     return ""
 
 
+def _parse_int_id(value: object) -> int | None:
+    raw = _clean(value)
+    if not raw:
+        return None
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _unwrap_envelope(payload: object) -> object:
     """Peel sub2api's `{code, message, data}` envelope, returning the inner `data` field
     when present. Also handles unwrapped responses from older/alt versions."""
@@ -310,7 +321,9 @@ def list_remote_accounts(server: dict) -> list[dict]:
                     continue
                 credentials = account.get("credentials") if isinstance(account.get("credentials"), dict) else {}
                 access_token = _extract_access_token(credentials)
-                if not access_token:
+                credentials_status = account.get("credentials_status") if isinstance(account.get("credentials_status"), dict) else {}
+                has_access_token = bool(access_token) or bool(credentials_status.get("has_access_token"))
+                if not has_access_token:
                     continue
                 account_id = account.get("id")
                 items.append({
@@ -343,6 +356,33 @@ def list_remote_groups(server: dict) -> list[dict]:
     session = Session(verify=True)
     items: list[dict] = []
     try:
+        all_response = session.get(
+            f"{base_url.rstrip('/')}/api/v1/admin/groups/all",
+            headers=headers,
+            params={"platform": "openai"},
+            timeout=30,
+        )
+        if all_response.ok:
+            payload = all_response.json()
+            data = _unwrap_envelope(payload)
+            if isinstance(data, list):
+                for group in data:
+                    if not isinstance(group, dict):
+                        continue
+                    group_id = group.get("id")
+                    if group_id is None:
+                        continue
+                    items.append({
+                        "id": str(group_id),
+                        "name": _clean(group.get("name")),
+                        "description": _clean(group.get("description")),
+                        "platform": _clean(group.get("platform")),
+                        "status": _clean(group.get("status")),
+                        "account_count": int(group.get("account_count") or 0),
+                        "active_account_count": int(group.get("active_account_count") or 0),
+                    })
+                return items
+
         page = 1
         while True:
             response = session.get(
@@ -385,6 +425,54 @@ def list_remote_groups(server: dict) -> list[dict]:
         session.close()
 
     return items
+
+
+def _fetch_exported_openai_accounts(server: dict, account_ids: list[str]) -> list[dict]:
+    """Fetch raw account credentials via sub2api admin data export.
+
+    The regular `/admin/accounts` list/detail responses redact sensitive
+    credentials. The explicit export endpoint is intended for administrator
+    backup and returns raw `credentials.access_token`.
+    """
+    base_url = _clean(server.get("base_url"))
+    headers = _auth_headers(server)
+    ids = [
+        parsed
+        for item in account_ids
+        if (parsed := _parse_int_id(item)) is not None
+    ]
+    if not ids:
+        return []
+
+    session = Session(verify=True)
+    try:
+        response = session.get(
+            f"{base_url.rstrip('/')}/api/v1/admin/accounts/data",
+            headers=headers,
+            params={
+                "ids": ",".join(str(item) for item in ids),
+                "include_proxies": "false",
+            },
+            timeout=60,
+        )
+        if not response.ok:
+            raise RuntimeError(f"sub2api export failed: HTTP {response.status_code} {response.text[:200]}")
+        payload = _unwrap_envelope(response.json())
+    finally:
+        session.close()
+
+    if not isinstance(payload, dict):
+        return []
+    accounts = payload.get("accounts")
+    if not isinstance(accounts, list):
+        return []
+    return [
+        account
+        for account in accounts
+        if isinstance(account, dict)
+           and _clean(account.get("platform")).lower() == "openai"
+           and _clean(account.get("type")).lower() == "oauth"
+    ]
 
 
 def _fetch_access_token_for_account(server: dict, account_id: str) -> tuple[str, dict]:
@@ -473,27 +561,45 @@ class Sub2APIImportService:
         self._update_job(server_id, status="running")
 
         tokens: list[str] = []
-        max_workers = min(8, max(1, len(account_ids)))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {
-                executor.submit(_fetch_access_token_for_account, server, account_id): account_id
-                for account_id in account_ids
-            }
-            for future in as_completed(future_map):
-                account_id = future_map[future]
-                try:
-                    token, _meta = future.result()
+        try:
+            exported_accounts = _fetch_exported_openai_accounts(server, account_ids)
+            for account in exported_accounts:
+                credentials = account.get("credentials") if isinstance(account.get("credentials"), dict) else {}
+                token = _extract_access_token(credentials)
+                if token:
                     tokens.append(token)
-                except Exception as exc:
-                    self._append_error(server_id, account_id, str(exc) or "unknown error")
 
-                current = self._config.get_import_job(server_id) or {}
-                failed = len(current.get("errors") or [])
-                self._update_job(
-                    server_id,
-                    completed=int(current.get("completed") or 0) + 1,
-                    failed=failed,
-                )
+            missing = max(0, len(account_ids) - len(tokens))
+            for account_id in account_ids[:missing]:
+                self._append_error(server_id, account_id, "missing access_token")
+            current = self._config.get_import_job(server_id) or {}
+            self._update_job(
+                server_id,
+                completed=len(account_ids),
+                failed=len(current.get("errors") or []),
+            )
+        except Exception:
+            max_workers = min(8, max(1, len(account_ids)))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {
+                    executor.submit(_fetch_access_token_for_account, server, account_id): account_id
+                    for account_id in account_ids
+                }
+                for future in as_completed(future_map):
+                    account_id = future_map[future]
+                    try:
+                        token, _meta = future.result()
+                        tokens.append(token)
+                    except Exception as exc:
+                        self._append_error(server_id, account_id, str(exc) or "unknown error")
+
+                    current = self._config.get_import_job(server_id) or {}
+                    failed = len(current.get("errors") or [])
+                    self._update_job(
+                        server_id,
+                        completed=int(current.get("completed") or 0) + 1,
+                        failed=failed,
+                    )
 
         if not tokens:
             current = self._config.get_import_job(server_id) or {}
