@@ -210,7 +210,6 @@ cd image2-2api
 
 ```bash
 cp .env.example .env
-printf '{}\n' > config.json
 mkdir -p data
 ```
 
@@ -220,10 +219,10 @@ mkdir -p data
 nano .env
 ```
 
-至少修改后台密钥：
+默认后台密钥：
 
 ```env
-CHATGPT2API_AUTH_KEY=换成你自己的后台密钥
+CHATGPT2API_AUTH_KEY=chatgpt2api
 STORAGE_BACKEND=postgres
 DATABASE_URL=postgresql://image2_2api:image2_2api@image2-2api-postgres:5432/image2_2api
 ```
